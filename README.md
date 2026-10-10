@@ -1,36 +1,116 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AI QA Platform 🚀
+
+An AI-assisted QA automation platform built with **Next.js, TypeScript, and Playwright** to streamline test case generation and browser-based application validation.
+
+## Overview
+
+The AI QA Platform provides a foundation for generating test scenarios from Jira requirements and executing browser checks against QA and UAT environments.
+
+The project combines a web-based dashboard with a Playwright-powered API to collect execution results and browser diagnostics.
+
+## Features
+
+- **Test Case Generation:** Generate predefined test scenarios based on a Jira ticket description.
+- **Test Coverage Selection:** Select positive, negative, and edge-case categories.
+- **Environment Selection:** Configure QA or UAT as the target environment.
+- **Browser Automation:** Launch a headless Chromium browser using Playwright.
+- **Application Validation:** Check page navigation, HTTP response status, and page title.
+- **Page Inspection:** Collect heading, link, button, and input counts.
+- **Browser Diagnostics:** Capture browser console errors and page errors.
+- **Screenshot Evidence:** Attempt to capture screenshots and return them with execution results when available.
+- **Execution Summary:** Display passed and failed counts in the dashboard.
+
+## Tech Stack
+
+| Technology | Purpose |
+|---|---|
+| Next.js | Web application and API routes |
+| React | Interactive user interface |
+| TypeScript | Type-safe development |
+| Playwright | Browser automation |
+| Tailwind CSS | Dashboard styling |
+| Node.js | Runtime environment |
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
+
+- Node.js and npm
+- Git
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/Chaitanyamark/ai-qa-platform.git
+cd ai-qa-platform
+```
+
+### 2. Install dependencies
+
+```bash
+npm install
+```
+
+### 3. Install the Playwright Chromium browser
+
+```bash
+npx playwright install chromium
+```
+
+### 4. Start the development server
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 5. Open the application
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Navigate to [http://localhost:3000](http://localhost:3000).
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## How to Use
 
-## Learn More
+1. Enter a Jira ticket description and acceptance criteria.
+2. Provide the URL of an application you are authorized to test.
+3. Select the target environment.
+4. Choose the desired test coverage categories.
+5. Generate test scenarios.
+6. Click **Run Browser Test** to execute the current Playwright page-load check.
+7. Review the HTTP status, page details, browser errors, and screenshot when available.
 
-To learn more about Next.js, take a look at the following resources:
+## Current Implementation
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The current version is an MVP.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- Test case generation uses predefined templates.
+- Browser execution currently performs a page-load check rather than executing every generated scenario.
+- Screenshot capture is best-effort and may be unavailable for some websites.
+- Jira integration, AI-powered test generation, and full scenario execution are planned enhancements.
 
-## Deploy on Vercel
+## Roadmap
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+- [ ] Execute generated scenarios as real Playwright tests.
+- [ ] Add assertions for expected application behavior.
+- [ ] Generate test cases from Jira acceptance criteria using an AI model.
+- [ ] Integrate with the Jira API.
+- [ ] Add downloadable HTML and JSON reports.
+- [ ] Improve failure diagnostics and screenshot evidence.
+- [ ] Add automated tests for the platform itself.
+- [ ] Add CI/CD execution with GitHub Actions.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Security Notes
+
+- Use only application URLs you are authorized to test.
+- Do not commit API keys, credentials, or environment secrets.
+- The browser-execution endpoint is intended for local development and is not yet hardened for public deployment.
+
+## Author
+
+**Chaitanya Desai**
+
+QA Automation Engineer | Playwright | TypeScript | Selenium | API Testing
+
+GitHub: [Chaitanyamark](https://github.com/Chaitanyamark)
+
+---
+
+*This project is under active development as a hands-on QA automation engineering project.*
