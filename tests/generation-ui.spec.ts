@@ -31,6 +31,13 @@ test("dashboard sends only the selected test category and renders the result", a
   await expect(
     page.getByRole("heading", { name: "Generated Test Cases (1)" })
   ).toBeVisible();
+  const coverageWarning = page.getByRole("alert", {
+    name: "Generation coverage warning",
+  });
+  await expect(coverageWarning).toContainText("Partial generation");
+  await expect(coverageWarning).toContainText(
+    "Positive: 1 of at least 5 cases (below minimum)"
+  );
 
   const statsResponse = await request.get("http://127.0.0.1:11435/__stats");
   const stats = (await statsResponse.json()) as { totalCalls: number };

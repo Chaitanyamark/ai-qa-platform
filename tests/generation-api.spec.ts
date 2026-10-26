@@ -2,6 +2,15 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 
 const mockService = "http://127.0.0.1:11435";
 
+type Coverage = {
+  requestedTypes: string[];
+  minimumCasesPerType: number;
+  caseCounts: Array<{ type: string; count: number }>;
+  failedTypes: string[];
+  underfilledTypes: string[];
+  status: "complete" | "partial";
+};
+
 async function resetMock(request: APIRequestContext) {
   const response = await request.post(mockService + "/__reset");
   expect(response.ok()).toBeTruthy();
@@ -19,6 +28,10 @@ async function generate(
   return { response, body };
 }
 
+function getCoverage(body: Record<string, unknown>): Coverage {
+  return body.coverage as Coverage;
+}
+
 async function getStats(request: APIRequestContext) {
   const response = await request.get(mockService + "/__stats");
   return (await response.json()) as Record<string, unknown>;
@@ -28,7 +41,7 @@ test.beforeEach(async ({ request }) => {
   await resetMock(request);
 });
 
-test("returns a valid AI case for a selected category", async ({ request }) => {
+test("reports complete coverage when the requested minimum is met", async ({ request }) => {
   const { response, body } = await generate(request, "A simple profile requirement");
 
   expect(response.status()).toBe(200);
@@ -36,10 +49,16 @@ test("returns a valid AI case for a selected category", async ({ request }) => {
   expect(Array.isArray(body.testCases)).toBeTruthy();
 
   const cases = body.testCases as Array<Record<string, unknown>>;
-  expect(cases).toHaveLength(1);
-  expect(cases[0].type).toBe("Positive");
+  expect(cases).toHaveLength(5);
+  expect(cases.every((item) => item.type === "Positive")).toBeTruthy();
   expect(cases[0].id).toBe("TC001");
   expect(cases[0].steps).toHaveLength(4);
+
+  expect(getCoverage(body)).toMatchObject({
+    status: "complete",
+    minimumCasesPerType: 5,
+    caseCounts: [{ type: "Positive", count: 5 }],
+  });
 });
 
 test("accepts valid JSON wrapped in Markdown fences", async ({ request }) => {
@@ -50,10 +69,11 @@ test("accepts valid JSON wrapped in Markdown fences", async ({ request }) => {
 
   expect(response.status()).toBe(200);
   expect(body.generationMethod).toBe("ai");
-  expect(body.testCases).toHaveLength(1);
+  expect(body.testCases).toHaveLength(5);
+  expect(getCoverage(body).status).toBe("complete");
 });
 
-test("characterizes that fewer cases than requested are accepted as complete", async ({
+test("reports a partial result when a category returns fewer than the minimum", async ({
   request,
 }) => {
   const { response, body } = await generate(request, "Requirement [[mock:short]]");
@@ -61,12 +81,18 @@ test("characterizes that fewer cases than requested are accepted as complete", a
   expect(response.status()).toBe(200);
   expect(body.generationMethod).toBe("ai");
   expect(body.testCases).toHaveLength(1);
+  expect(getCoverage(body)).toMatchObject({
+    status: "partial",
+    underfilledTypes: ["Positive"],
+    failedTypes: [],
+    caseCounts: [{ type: "Positive", count: 1 }],
+  });
 
   const stats = await getStats(request);
   expect(stats.totalCalls).toBe(1);
 });
 
-test("characterizes silent partial success when one requested category fails", async ({
+test("reports a failed category while preserving successful categories", async ({
   request,
 }) => {
   const { response, body } = await generate(
@@ -77,10 +103,22 @@ test("characterizes silent partial success when one requested category fails", a
 
   expect(response.status()).toBe(200);
   expect(body.generationMethod).toBe("ai");
-  expect(body.partial).toBeUndefined();
-
   const cases = body.testCases as Array<Record<string, unknown>>;
-  expect(cases.map((item) => item.type)).toEqual(["Positive", "Edge Cases"]);
+  expect([...new Set(cases.map((item) => item.type))]).toEqual([
+    "Positive",
+    "Edge Cases",
+  ]);
+  expect(getCoverage(body)).toMatchObject({
+    status: "partial",
+    requestedTypes: ["Positive", "Negative", "Edge Cases"],
+    failedTypes: ["Negative"],
+    underfilledTypes: [],
+    caseCounts: [
+      { type: "Positive", count: 5 },
+      { type: "Negative", count: 0 },
+      { type: "Edge Cases", count: 5 },
+    ],
+  });
 
   const stats = await getStats(request);
   expect(stats.totalCalls).toBe(4);
@@ -106,6 +144,10 @@ test("preserves all valid cases when the model returns many", async ({
   expect(response.status()).toBe(200);
   expect(body.generationMethod).toBe("ai");
   expect(body.testCases).toHaveLength(12);
+  expect(getCoverage(body).status).toBe("complete");
+  expect(getCoverage(body).caseCounts).toEqual([
+    { type: "Positive", count: 12 },
+  ]);
 });
 
 for (const scenario of [
@@ -126,6 +168,8 @@ for (const scenario of [
     expect(response.status()).toBe(200);
     expect(body.generationMethod).toBe("template-fallback");
     expect(typeof body.fallbackReason).toBe("string");
+    expect(getCoverage(body).status).toBe("partial");
+    expect(getCoverage(body).failedTypes).toEqual(["Positive"]);
 
     const stats = await getStats(request);
     expect(stats.totalCalls).toBe(2);
@@ -142,6 +186,7 @@ test("uses the template fallback immediately for provider HTTP errors", async ({
 
   expect(response.status()).toBe(200);
   expect(body.generationMethod).toBe("template-fallback");
+  expect(getCoverage(body).failedTypes).toEqual(["Positive"]);
 
   const stats = await getStats(request);
   expect(stats.totalCalls).toBe(1);

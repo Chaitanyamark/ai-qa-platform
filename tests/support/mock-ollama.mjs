@@ -105,7 +105,8 @@ const server = createServer(async (request, response) => {
   ) {
     content = '{"testCases": [}';
   } else {
-    let count = 1;
+    let count = 5;
+    if (requirement.includes("[[mock:short]]")) count = 1;
     if (requirement.includes("[[mock:many]]")) count = 12;
 
     let cases = Array.from({ length: count }, (_, index) =>
