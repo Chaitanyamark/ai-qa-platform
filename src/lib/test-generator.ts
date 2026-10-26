@@ -1,9 +1,10 @@
-import { callLLM } from "@/lib/ai-provider";
+import { callLLM, MIN_CASES_PER_TYPE } from "@/lib/ai-provider";
 import { generateWithTemplates } from "@/lib/template-generator";
 import {
   GenerationResultSchema,
   type TestType as GeneratedTestType,
   type TestCase as GeneratedTestCase,
+  type GenerationCoverage,
   type GenerationResult,
 } from "@/lib/test-generator-schema";
 
@@ -147,6 +148,36 @@ function filterSelectedTypes(
   );
 }
 
+function buildCoverage(
+  requestedTypes: GeneratedTestType[],
+  testCases: GeneratedTestCase[],
+  failedTypes: GeneratedTestType[] = [],
+  minimumCasesPerType = MIN_CASES_PER_TYPE
+): GenerationCoverage {
+  const caseCounts = requestedTypes.map((type) => ({
+    type,
+    count: testCases.filter((testCase) => testCase.type === type).length,
+  }));
+  const underfilledTypes = caseCounts
+    .filter(
+      ({ type, count }) =>
+        count < minimumCasesPerType && !failedTypes.includes(type)
+    )
+    .map(({ type }) => type);
+
+  return {
+    requestedTypes,
+    minimumCasesPerType,
+    caseCounts,
+    failedTypes,
+    underfilledTypes,
+    status:
+      failedTypes.length > 0 || underfilledTypes.length > 0
+        ? "partial"
+        : "complete",
+  };
+}
+
 export type TestType = "Positive" | "Negative" | "Edge Cases";
 
 export interface TestCase {
@@ -239,10 +270,18 @@ export async function generateTestCasesWithAI(
       );
     }
 
+    const testCases = assignTestCaseIds(detailedCases);
+
     return {
       ...validated,
-      testCases: assignTestCaseIds(detailedCases),
+      testCases,
       generationMethod: "ai",
+      coverage: buildCoverage(
+        selectedTypes,
+        testCases,
+        raw.failedTypes,
+        raw.minimumCasesPerType
+      ),
     };
   } catch (error) {
     fallbackReason =
@@ -259,14 +298,17 @@ export async function generateTestCasesWithAI(
       selectedTypes
     );
 
+    const fallbackCases = assignTestCaseIds(
+      deduplicateTestCases(selectedFallbackCases)
+    );
+
     return {
       ...fallback,
-      testCases: assignTestCaseIds(
-        deduplicateTestCases(selectedFallbackCases)
-      ),
+      testCases: fallbackCases,
       generationMethod: "template-fallback",
       // Add `fallbackReason: z.string().optional()` to GenerationResultSchema.
       fallbackReason,
+      coverage: buildCoverage(selectedTypes, fallbackCases, selectedTypes),
     };
   }
 }

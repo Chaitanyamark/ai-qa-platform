@@ -40,7 +40,7 @@ const TYPE_DEFINITIONS: Record<TestType, string> = {
     "browser, device, viewport or environment differences relevant to the requirement.",
 };
 
-const MIN_CASES_PER_TYPE = 5;
+export const MIN_CASES_PER_TYPE = 5;
 const MAX_CASES_PER_TYPE = 8;
 const MAX_GENERATED_CASES = 50;
 const MAX_ATTEMPTS_PER_TYPE = 2;
@@ -293,6 +293,7 @@ export async function callLLM(
 
   const results: Awaited<ReturnType<typeof generateForType>>[] = [];
   const errors: string[] = [];
+  const failedTypes: TestType[] = [];
 
   // One focused request per type keeps every response small enough to
   // finish before the token limit, which is what small local models need.
@@ -329,6 +330,7 @@ export async function callLLM(
 
     if (lastError) {
       errors.push(`${type}: ${lastError}`);
+      failedTypes.push(type);
     }
   }
 
@@ -380,15 +382,18 @@ export async function callLLM(
     ),
   ];
 
+  const testCases = allCases
+    .slice(0, MAX_GENERATED_CASES)
+    .map((testCase, index) => ({
+      ...testCase,
+      id: `TC${String(index + 1).padStart(3, "0")}`,
+    }));
   return {
     ...results[0],
     summary,
     openQuestions,
-    testCases: allCases
-      .slice(0, MAX_GENERATED_CASES)
-      .map((testCase, index) => ({
-        ...testCase,
-        id: `TC${String(index + 1).padStart(3, "0")}`,
-      })),
+    testCases,
+    failedTypes,
+    minimumCasesPerType: MIN_CASES_PER_TYPE,
   };
 }

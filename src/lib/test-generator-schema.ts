@@ -31,9 +31,19 @@ export const GenerationResultSchema = z.object({
 export type TestType = z.infer<typeof TestTypeSchema>;
 export type TestCase = z.infer<typeof TestCaseSchema>;
 
+export type GenerationCoverage = {
+  requestedTypes: TestType[];
+  minimumCasesPerType: number;
+  caseCounts: Array<{ type: TestType; count: number }>;
+  failedTypes: TestType[];
+  underfilledTypes: TestType[];
+  status: "complete" | "partial";
+};
+
 export type GenerationResult = z.infer<
   typeof GenerationResultSchema
 > & {
   generationMethod: "ai" | "template-fallback";
   fallbackReason?: string;
+  coverage?: GenerationCoverage;
 };

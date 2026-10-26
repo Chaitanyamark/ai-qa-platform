@@ -108,6 +108,9 @@ export default function Home() {
 
     useState<ExecutionResponse | null>(null);
 
+  const partialCoverage =
+    generation?.coverage?.status === "partial" ? generation.coverage : null;
+
 
 
   const toggleTest = (type: string) => {
@@ -853,6 +856,27 @@ export default function Home() {
                 </p>
 
 
+
+                {partialCoverage && (
+                  <p
+                    role="alert"
+                    aria-label="Generation coverage warning"
+                    className="rounded-lg border border-amber-700 bg-amber-950/40 p-3 text-sm text-amber-200"
+                  >
+                    <strong>Partial generation:</strong>{" "}
+                    {partialCoverage.caseCounts
+                      .filter(
+                        ({ type }) =>
+                          partialCoverage.failedTypes.includes(type) ||
+                          partialCoverage.underfilledTypes.includes(type)
+                      )
+                      .map(
+                        ({ type, count }) =>
+                          `${type}: ${count} of at least ${partialCoverage.minimumCasesPerType} cases (${partialCoverage.failedTypes.includes(type) ? "AI generation failed" : "below minimum"})`
+                      )
+                      .join("; ")}
+                  </p>
+                )}
 
                 {generation.openQuestions.length > 0 && (
 
