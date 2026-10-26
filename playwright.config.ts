@@ -1,5 +1,7 @@
 import { defineConfig } from "@playwright/test";
 
+const useInstalledChrome = process.env.PLAYWRIGHT_CHANNEL === "chrome";
+
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: false,
@@ -8,6 +10,7 @@ export default defineConfig({
   outputDir: "./evidence/playwright",
   timeout: 30_000,
   use: {
+    ...(useInstalledChrome ? { channel: "chrome" } : {}),
     baseURL: "http://127.0.0.1:3210",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
