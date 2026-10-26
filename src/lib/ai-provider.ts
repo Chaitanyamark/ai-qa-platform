@@ -1,4 +1,5 @@
 import { GenerationResultSchema } from "@/lib/test-generator-schema";
+import { deduplicateTestCases } from "@/lib/test-case-deduplication";
 
 const OLLAMA_URL = (
   process.env.OLLAMA_URL || "http://127.0.0.1:11434"
@@ -347,24 +348,11 @@ export async function callLLM(
     );
   }
 
-  const seen = new Set<string>();
-
-  const allCases = results
-    .flatMap((result) => result.testCases)
-    .filter((testCase) => {
-      if (!types.includes(testCase.type)) {
-        return false;
-      }
-
-      const key = testCase.title.trim().toLowerCase();
-
-      if (!key || seen.has(key)) {
-        return false;
-      }
-
-      seen.add(key);
-      return true;
-    });
+  const allCases = deduplicateTestCases(
+    results
+      .flatMap((result) => result.testCases)
+      .filter((testCase) => types.includes(testCase.type))
+  );
 
   if (allCases.length === 0) {
     throw new Error(

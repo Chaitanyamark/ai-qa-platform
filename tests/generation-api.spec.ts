@@ -124,7 +124,7 @@ test("reports a failed category while preserving successful categories", async (
   expect(stats.totalCalls).toBe(4);
 });
 
-test("characterizes title-only deduplication of distinct same-title cases", async ({
+test("preserves distinct cases with identical titles", async ({
   request,
 }) => {
   const { response, body } = await generate(
@@ -133,7 +133,30 @@ test("characterizes title-only deduplication of distinct same-title cases", asyn
   );
 
   expect(response.status()).toBe(200);
+  const cases = body.testCases as Array<Record<string, unknown>>;
+  expect(cases).toHaveLength(2);
+  expect(cases.map((testCase) => testCase.testData)).toEqual([
+    "Display name: Asha",
+    "Display name: Kavya",
+  ]);
+  expect(getCoverage(body)).toMatchObject({
+    status: "partial",
+    underfilledTypes: ["Positive"],
+    caseCounts: [{ type: "Positive", count: 2 }],
+  });
+});
+
+test("removes exact duplicate test cases", async ({ request }) => {
+  const { response, body } = await generate(
+    request,
+    "Requirement [[mock:exact-duplicate]]"
+  );
+
+  expect(response.status()).toBe(200);
   expect(body.testCases).toHaveLength(1);
+  expect(getCoverage(body).caseCounts).toEqual([
+    { type: "Positive", count: 1 },
+  ]);
 });
 
 test("preserves all valid cases when the model returns many", async ({
