@@ -1,7 +1,9 @@
 import { defineConfig } from "@playwright/test";
 
 const useInstalledChrome = process.env.PLAYWRIGHT_CHANNEL === "chrome";
-const appUrl = "http://127.0.0.1:3210";
+const appPort = Number(process.env.PLAYWRIGHT_PORT) || 3210;
+const mockPort = Number(process.env.MOCK_OLLAMA_PORT) || 11436;
+const appUrl = `http://127.0.0.1:${appPort}`;
 const nextCommand =
   process.platform === "win32"
     ? ".\\node_modules\\.bin\\next.cmd"
@@ -23,20 +25,20 @@ export default defineConfig({
   webServer: [
     {
       command: "node tests/support/mock-ollama.mjs",
-      url: "http://127.0.0.1:11436/health",
+      url: `http://127.0.0.1:${mockPort}/health`,
       reuseExistingServer: !process.env.CI,
       timeout: 10_000,
       env: {
-        MOCK_OLLAMA_PORT: "11436",
+        MOCK_OLLAMA_PORT: String(mockPort),
       },
     },
     {
-      command: `${nextCommand} dev --hostname 127.0.0.1 --port 3210`,
+      command: `${nextCommand} dev --hostname 127.0.0.1 --port ${appPort}`,
       url: appUrl,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
       env: {
-        OLLAMA_URL: "http://127.0.0.1:11436",
+        OLLAMA_URL: `http://127.0.0.1:${mockPort}`,
         OLLAMA_MODEL: "qa-mock",
         OLLAMA_TIMEOUT_MS: "3000",
         NEXT_DIST_DIR: ".next-playwright",

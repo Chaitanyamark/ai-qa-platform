@@ -5,6 +5,8 @@ const state = {
   totalCalls: 0,
   callsByType: {},
   lastPromptsByType: {},
+  schemaFormatByType: {},
+  numPredictByType: {},
 };
 
 function sendJson(response, status, body) {
@@ -138,6 +140,8 @@ const server = createServer(async (request, response) => {
     state.totalCalls = 0;
     state.callsByType = {};
     state.lastPromptsByType = {};
+    state.schemaFormatByType = {};
+    state.numPredictByType = {};
     return sendJson(response, 200, { reset: true });
   }
 
@@ -165,6 +169,8 @@ const server = createServer(async (request, response) => {
   state.totalCalls += 1;
   state.callsByType[type] = (state.callsByType[type] || 0) + 1;
   state.lastPromptsByType[type] = prompt;
+  state.schemaFormatByType[type] = body?.format;
+  state.numPredictByType[type] = body?.options?.num_predict;
 
   if (requirement.includes("[[mock:provider-error]]")) {
     return sendJson(response, 503, { error: "Deterministic provider error." });

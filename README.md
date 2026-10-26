@@ -88,6 +88,9 @@ The current version is an MVP.
   reported as partial coverage. If Ollama fails, the app labels its generic
   template suggestions as a fallback; those suggestions are not a content-based
   scenario plan.
+- Ollama responses use a structured JSON schema and a response token budget
+  derived from the prompt size and context window. The default output ceiling is
+  8,192 tokens and can be changed with `OLLAMA_NUM_PREDICT`.
 - Browser execution currently performs a page-load check rather than executing every generated scenario.
 - Screenshot capture is best-effort and may be unavailable for some websites.
 - Jira integration and full scenario execution are planned enhancements.

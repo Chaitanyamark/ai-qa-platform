@@ -1,10 +1,13 @@
 import { expect, test } from "@playwright/test";
 
+const mockPort = Number(process.env.MOCK_OLLAMA_PORT) || 11436;
+const mockService = `http://127.0.0.1:${mockPort}`;
+
 test("dashboard sends only the selected test category and renders the result", async ({
   page,
   request,
 }) => {
-  await request.post("http://127.0.0.1:11436/__reset");
+  await request.post(mockService + "/__reset");
   const requirement = [
     "Profile update [[mock:short]]",
     "1. The user can change their profile name.",
@@ -45,7 +48,7 @@ test("dashboard sends only the selected test category and renders the result", a
     "Positive: 1 of 4 planned cases (below target)"
   );
 
-  const statsResponse = await request.get("http://127.0.0.1:11436/__stats");
+  const statsResponse = await request.get(mockService + "/__stats");
   const stats = (await statsResponse.json()) as { totalCalls: number };
   expect(stats.totalCalls).toBe(1);
 });

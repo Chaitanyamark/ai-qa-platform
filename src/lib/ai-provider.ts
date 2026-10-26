@@ -11,6 +11,10 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5:7b";
 // The context window must hold the prompt, the requirement (up to 20,000
 // characters) AND the generated JSON, so keep it well above 8192.
 const OLLAMA_NUM_CTX = Number(process.env.OLLAMA_NUM_CTX) || 16384;
+const OLLAMA_MAX_PREDICT = Math.max(
+  1024,
+  Number(process.env.OLLAMA_NUM_PREDICT) || 8192
+);
 
 // Per-request timeout. Each selected test type is one request.
 const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS) || 240000;
@@ -275,6 +279,15 @@ async function generateForType(
   temperature: number
 ) {
   let response: Response;
+  const prompt = buildPrompt(requirement, type);
+  const estimatedPromptTokens = Math.ceil(prompt.length / 3);
+  const responseTokenBudget = Math.max(
+    1024,
+    Math.min(
+      OLLAMA_MAX_PREDICT,
+      OLLAMA_NUM_CTX - estimatedPromptTokens - 512
+    )
+  );
 
   try {
     response = await fetch(`${OLLAMA_URL}/api/chat`, {
@@ -286,11 +299,11 @@ async function generateForType(
       body: JSON.stringify({
         model: OLLAMA_MODEL,
         stream: false,
-        format: "json",
+        format: z.toJSONSchema(PlannedGenerationSchema),
         options: {
           temperature,
           num_ctx: OLLAMA_NUM_CTX,
-          num_predict: 4096,
+          num_predict: responseTokenBudget,
         },
         messages: [
           {
@@ -303,7 +316,7 @@ async function generateForType(
           },
           {
             role: "user",
-            content: buildPrompt(requirement, type),
+            content: prompt,
           },
         ],
       }),

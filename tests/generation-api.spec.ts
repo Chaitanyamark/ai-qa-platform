@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 
-const mockService = "http://127.0.0.1:11436";
+const mockPort = Number(process.env.MOCK_OLLAMA_PORT) || 11436;
+const mockService = `http://127.0.0.1:${mockPort}`;
 
 type Coverage = {
   requestedTypes: string[];
@@ -138,6 +139,18 @@ test("caps an oversized model scenario plan and reports the cap", async ({ reque
     targetCaseCounts: [{ type: "Positive", count: 52 }],
     targetWasCapped: true,
   });
+
+  const stats = await getStats(request);
+  const schemaFormats = stats.schemaFormatByType as Record<string, unknown>;
+  expect(schemaFormats.Positive).toMatchObject({
+    type: "object",
+    properties: {
+      plannedScenarios: { type: "array" },
+      testCases: { type: "array" },
+    },
+  });
+  const responseBudgets = stats.numPredictByType as Record<string, number>;
+  expect(responseBudgets.Positive).toBeGreaterThan(4096);
 });
 
 test("different 15-criterion tickets can produce different planned case counts", async ({
