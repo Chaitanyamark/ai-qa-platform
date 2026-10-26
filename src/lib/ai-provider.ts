@@ -1,4 +1,5 @@
-import { GenerationResultSchema } from "@/lib/test-generator-schema";
+import { z } from "zod";
+import { TestCaseSchema } from "@/lib/test-generator-schema";
 import { deduplicateTestCases } from "@/lib/test-case-deduplication";
 
 const OLLAMA_URL = (
@@ -41,10 +42,25 @@ const TYPE_DEFINITIONS: Record<TestType, string> = {
     "browser, device, viewport or environment differences relevant to the requirement.",
 };
 
-export const MIN_CASES_PER_TYPE = 5;
-const MAX_CASES_PER_TYPE = 8;
 const MAX_GENERATED_CASES = 50;
 const MAX_ATTEMPTS_PER_TYPE = 2;
+
+const PlannedScenarioSchema = z.object({
+  scenarioId: z.string().min(1),
+  requirementRef: z.string().min(1),
+  objective: z.string().min(1),
+});
+
+const PlannedTestCaseSchema = TestCaseSchema.extend({
+  scenarioId: z.string().min(1),
+});
+
+const PlannedGenerationSchema = z.object({
+  summary: z.string(),
+  openQuestions: z.array(z.string()),
+  plannedScenarios: z.array(PlannedScenarioSchema),
+  testCases: z.array(PlannedTestCaseSchema),
+});
 
 /**
  * Thrown when Ollama cannot be reached, times out, or answers with an HTTP
@@ -93,6 +109,13 @@ function normalizeTypes(raw: unknown, types: TestType[]): unknown {
         normalized.testData = JSON.stringify(testCase.testData);
       }
 
+      if (
+        typeof testCase.requirementRef !== "string" ||
+        !testCase.requirementRef.trim()
+      ) {
+        normalized.requirementRef = "Supplied requirement";
+      }
+
       return normalized;
     }),
   };
@@ -132,9 +155,24 @@ ${requirement}
 </requirement>
 
 TASK
-Write ${MIN_CASES_PER_TYPE} to ${MAX_CASES_PER_TYPE} distinct test cases of type "${type}" and nothing else.
-"${type}" means: ${TYPE_DEFINITIONS[type]}
-Cover different behaviors from the requirement. No near-duplicates.
+Plan and write test cases of type "${type}" only. "${type}" means:
+${TYPE_DEFINITIONS[type]}
+
+First inspect the actual criteria and identify every distinct, independently
+testable scenario that applies to this category. The number of scenarios must
+come from the requirement's behaviors and conditions. Do not use a fixed count,
+a per-criterion quota, or a count based on how many criteria were supplied.
+Split independent conditions when they can pass or fail separately. For
+example, a required field being blank, an email having invalid syntax, and an
+email already being registered are separate negative scenarios; one negative
+case must not stand in for all of them. Split boundary values only when the
+boundary changes the expected behavior. Avoid redundant combinations and
+near-duplicates. If no scenario in this category is justified by the supplied
+criteria, return an empty plannedScenarios array and explain why in summary.
+
+Then write exactly one test case for every planned scenario. Each case must
+carry that scenario's scenarioId and requirementRef. Do not write cases that
+are absent from plannedScenarios. Use a distinct scenarioId for each scenario.
 
 QUALITY RULES
 1. Title: specific, names the behavior and the condition being verified.
@@ -150,7 +188,7 @@ QUALITY RULES
    should see or which state should change. Never "works as expected".
 6. One primary verification per test case.
 7. requirementRef: the real ID from the requirement if one exists (a Jira key
-   or acceptance-criterion number), otherwise "Supplied requirement".
+   or acceptance-criterion number); otherwise use "Supplied requirement".
 
 GROUNDING
 - Use field names, buttons, pages, endpoints, messages and limits exactly as
@@ -188,14 +226,43 @@ OUTPUT
 Return exactly one valid JSON object. No Markdown fences and no text outside
 the JSON. Use this structure:
 {
-  "summary": "Behaviors covered, scope and limitations.",
+  "summary": "Why these distinct scenarios apply to the supplied criteria.",
   "openQuestions": ["Only important missing information."],
-  "testCases": [ ...${MIN_CASES_PER_TYPE} to ${MAX_CASES_PER_TYPE} objects shaped like the example above... ]
+  "plannedScenarios": [
+    {
+      "scenarioId": "S001",
+      "requirementRef": "AC-1",
+      "objective": "One independently testable behavior and its condition."
+    }
+  ],
+  "testCases": [
+    {
+      "scenarioId": "S001",
+      "id": "TC001",
+      "title": "Verify the behavior for the specified condition",
+      "type": "${type}",
+      "priority": "Medium",
+      "preconditions": [],
+      "steps": [
+        "1. Open the relevant feature.",
+        "2. Enter the synthetic value for this scenario.",
+        "3. Submit the form.",
+        "4. Verify the resulting state."
+      ],
+      "testData": "Synthetic value: example",
+      "expectedResult": "The specified behavior occurs for this condition.",
+      "requirementRef": "AC-1"
+    }
+  ]
 }
 
-Every test case needs: id, title, type, priority, preconditions, steps,
-expectedResult and requirementRef. testData is optional.
+Every planned scenario needs a unique scenarioId, requirementRef and objective.
+Every test case needs the matching scenarioId, id, title, type, priority,
+preconditions, steps, expectedResult and requirementRef. testData is optional.
 The type of every test case must be exactly "${type}".
+There must be exactly one test case for each planned scenario and no unplanned
+test cases. Keep plannedScenarios and testCases empty when this category does
+not apply to the requirement.
 Priority must be High, Medium or Low:
 High = critical journey, security or data integrity; Medium = important
 behavior; Low = minor impact.
@@ -275,7 +342,51 @@ async function generateForType(
 
   const parsed = normalizeTypes(parseModelJson(content), [type]);
 
-  return GenerationResultSchema.parse(parsed);
+  const result = PlannedGenerationSchema.parse(parsed);
+  const plannedById = new Map(
+    result.plannedScenarios.map((scenario) => [scenario.scenarioId, scenario])
+  );
+
+  if (plannedById.size !== result.plannedScenarios.length) {
+    throw new Error("Ollama returned duplicate scenario IDs in its plan.");
+  }
+
+  const seenCaseScenarios = new Map<string, string>();
+  const testCases = result.testCases.flatMap((testCase) => {
+    const scenario = plannedById.get(testCase.scenarioId);
+    if (!scenario) {
+      throw new Error(
+        `Ollama returned a test case for unplanned scenario "${testCase.scenarioId}".`
+      );
+    }
+    if (testCase.type !== type) {
+      throw new Error(
+        `Ollama returned type "${testCase.type}" while generating "${type}".`
+      );
+    }
+    const { scenarioId, ...caseContent } = testCase;
+    const contentKey = JSON.stringify({ ...caseContent, id: undefined });
+    const previousContent = seenCaseScenarios.get(scenarioId);
+
+    if (previousContent !== undefined) {
+      if (previousContent === contentKey) return [];
+      throw new Error(
+        `Ollama returned multiple different cases for scenario "${scenarioId}".`
+      );
+    }
+    seenCaseScenarios.set(scenarioId, contentKey);
+
+    return {
+      ...caseContent,
+      requirementRef: scenario.requirementRef,
+    };
+  });
+
+  return {
+    ...result,
+    testCases,
+    plannedScenarioCount: result.plannedScenarios.length,
+  };
 }
 
 export async function callLLM(
@@ -296,12 +407,17 @@ export async function callLLM(
     throw new Error("Select at least one test type.");
   }
 
-  const results: Awaited<ReturnType<typeof generateForType>>[] = [];
+  const results: Array<{
+    type: TestType;
+    result: Awaited<ReturnType<typeof generateForType>>;
+  }> = [];
   const errors: string[] = [];
   const failedTypes: TestType[] = [];
 
   // One focused request per type keeps every response small enough to
   // finish before the token limit, which is what small local models need.
+  // Each response creates its own semantic scenario plan, so no regex or
+  // requirement-count estimate is used to decide how many cases to request.
   // Requests run one after another so a local Ollama is not overloaded.
   for (const type of types) {
     let lastError = "";
@@ -316,7 +432,7 @@ export async function callLLM(
           attempt === 1 ? 0.25 : 0.4
         );
 
-        results.push(result);
+        results.push({ type, result });
         lastError = "";
         break;
       } catch (error) {
@@ -354,23 +470,19 @@ export async function callLLM(
 
   const allCases = deduplicateTestCases(
     results
-      .flatMap((result) => result.testCases)
+      .flatMap(({ result }) => result.testCases)
       .filter((testCase) => types.includes(testCase.type))
   );
 
-  if (allCases.length === 0) {
-    throw new Error(
-      "Ollama returned no usable test cases for the selected types."
-    );
-  }
-
   const summary =
-    results.map((result) => result.summary).find((text) => text?.trim()) ??
+    results
+      .map(({ result }) => result.summary)
+      .find((text) => text?.trim()) ??
     "";
 
   const openQuestions = [
     ...new Set(
-      results.flatMap((result) => result.openQuestions ?? [])
+      results.flatMap(({ result }) => result.openQuestions ?? [])
     ),
   ];
 
@@ -380,12 +492,33 @@ export async function callLLM(
       ...testCase,
       id: `TC${String(index + 1).padStart(3, "0")}`,
     }));
+  const outputWasCapped = allCases.length > MAX_GENERATED_CASES;
+  const successfulTypes = new Set(results.map(({ type }) => type));
+  const targetCaseCounts = types.map((type) => ({
+    type,
+    count:
+      results.find((item) => item.type === type)?.result.plannedScenarioCount ??
+      0,
+  }));
+  const notApplicableTypes = results
+    .filter(({ result }) => result.plannedScenarioCount === 0)
+    .map(({ type }) => type);
+
+  // Keep the model's category failure visible even if another category worked.
+  for (const type of types) {
+    if (!successfulTypes.has(type) && !failedTypes.includes(type)) {
+      failedTypes.push(type);
+    }
+  }
+
   return {
-    ...results[0],
+    ...results[0].result,
     summary,
     openQuestions,
     testCases,
     failedTypes,
-    minimumCasesPerType: MIN_CASES_PER_TYPE,
+    targetCaseCounts,
+    targetWasCapped: outputWasCapped,
+    notApplicableTypes,
   };
 }

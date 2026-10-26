@@ -33,10 +33,12 @@ export type TestCase = z.infer<typeof TestCaseSchema>;
 
 export type GenerationCoverage = {
   requestedTypes: TestType[];
-  minimumCasesPerType: number;
+  targetCaseCounts: Array<{ type: TestType; count: number }>;
   caseCounts: Array<{ type: TestType; count: number }>;
   failedTypes: TestType[];
   underfilledTypes: TestType[];
+  targetWasCapped: boolean;
+  notApplicableTypes: TestType[];
   status: "complete" | "partial";
 };
 

@@ -4,8 +4,14 @@ test("dashboard sends only the selected test category and renders the result", a
   page,
   request,
 }) => {
-  await request.post("http://127.0.0.1:11435/__reset");
-  const requirement = "Profile update [[mock:short]]";
+  await request.post("http://127.0.0.1:11436/__reset");
+  const requirement = [
+    "Profile update [[mock:short]]",
+    "1. The user can change their profile name.",
+    "2. The saved profile name appears in the header.",
+    "3. The saved name remains after reload.",
+    "4. The profile update displays a success message.",
+  ].join("\n");
   await page.goto("/");
   await page.getByLabel("Jira ticket and acceptance criteria").fill(requirement);
 
@@ -36,10 +42,10 @@ test("dashboard sends only the selected test category and renders the result", a
   });
   await expect(coverageWarning).toContainText("Partial generation");
   await expect(coverageWarning).toContainText(
-    "Positive: 1 of at least 5 cases (below minimum)"
+    "Positive: 1 of 4 planned cases (below target)"
   );
 
-  const statsResponse = await request.get("http://127.0.0.1:11435/__stats");
+  const statsResponse = await request.get("http://127.0.0.1:11436/__stats");
   const stats = (await statsResponse.json()) as { totalCalls: number };
   expect(stats.totalCalls).toBe(1);
 });

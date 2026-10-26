@@ -1,4 +1,4 @@
-import { callLLM, MIN_CASES_PER_TYPE } from "@/lib/ai-provider";
+import { callLLM } from "@/lib/ai-provider";
 import { deduplicateTestCases as deduplicateCases } from "@/lib/test-case-deduplication";
 import { generateWithTemplates } from "@/lib/template-generator";
 import {
@@ -136,8 +136,10 @@ function filterSelectedTypes(
 function buildCoverage(
   requestedTypes: GeneratedTestType[],
   testCases: GeneratedTestCase[],
+  targetCaseCounts: Array<{ type: GeneratedTestType; count: number }>,
   failedTypes: GeneratedTestType[] = [],
-  minimumCasesPerType = MIN_CASES_PER_TYPE
+  targetWasCapped = false,
+  notApplicableTypes: GeneratedTestType[] = []
 ): GenerationCoverage {
   const caseCounts = requestedTypes.map((type) => ({
     type,
@@ -146,18 +148,26 @@ function buildCoverage(
   const underfilledTypes = caseCounts
     .filter(
       ({ type, count }) =>
-        count < minimumCasesPerType && !failedTypes.includes(type)
+        count <
+          (targetCaseCounts.find((target) => target.type === type)?.count ?? 0) &&
+        !failedTypes.includes(type) &&
+        !notApplicableTypes.includes(type)
     )
     .map(({ type }) => type);
 
   return {
     requestedTypes,
-    minimumCasesPerType,
+    targetCaseCounts,
     caseCounts,
     failedTypes,
     underfilledTypes,
+    targetWasCapped,
+    notApplicableTypes,
     status:
-      failedTypes.length > 0 || underfilledTypes.length > 0
+      failedTypes.length > 0 ||
+      underfilledTypes.length > 0 ||
+      targetWasCapped ||
+      notApplicableTypes.length > 0
         ? "partial"
         : "complete",
   };
@@ -245,14 +255,19 @@ export async function generateTestCasesWithAI(
     console.log("[testgen] after meaningful filter:", detailedCases.length);
 
     if (detailedCases.length === 0) {
-      throw new Error(
-        `The AI returned no sufficiently detailed test cases ` +
-          `(raw: ${validated.testCases.length}, ` +
-          `after type filter: ${selectedCases.length}, ` +
-          `after dedupe: ${uniqueCases.length}, ` +
-          `after detail filter: 0). ` +
-          "Review the AI prompt in src/lib/ai-provider.ts."
-      );
+      return {
+        ...validated,
+        testCases: [],
+        generationMethod: "ai",
+        coverage: buildCoverage(
+          selectedTypes,
+          [],
+          raw.targetCaseCounts,
+          raw.failedTypes,
+          raw.targetWasCapped,
+          raw.notApplicableTypes
+        ),
+      };
     }
 
     const testCases = assignTestCaseIds(detailedCases);
@@ -264,8 +279,10 @@ export async function generateTestCasesWithAI(
       coverage: buildCoverage(
         selectedTypes,
         testCases,
+        raw.targetCaseCounts,
         raw.failedTypes,
-        raw.minimumCasesPerType
+        raw.targetWasCapped,
+        raw.notApplicableTypes
       ),
     };
   } catch (error) {
@@ -277,7 +294,6 @@ export async function generateTestCasesWithAI(
     const fallback = GenerationResultSchema.parse(
       generateWithTemplates(requirement)
     );
-
     const selectedFallbackCases = filterSelectedTypes(
       fallback.testCases,
       selectedTypes
@@ -286,6 +302,7 @@ export async function generateTestCasesWithAI(
     const fallbackCases = assignTestCaseIds(
       deduplicateTestCases(selectedFallbackCases)
     );
+    const fallbackTargets = selectedTypes.map((type) => ({ type, count: 0 }));
 
     return {
       ...fallback,
@@ -293,7 +310,12 @@ export async function generateTestCasesWithAI(
       generationMethod: "template-fallback",
       // Add `fallbackReason: z.string().optional()` to GenerationResultSchema.
       fallbackReason,
-      coverage: buildCoverage(selectedTypes, fallbackCases, selectedTypes),
+      coverage: buildCoverage(
+        selectedTypes,
+        fallbackCases,
+        fallbackTargets,
+        selectedTypes
+      ),
     };
   }
 }
