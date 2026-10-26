@@ -871,8 +871,30 @@ export default function Home() {
                           partialCoverage.underfilledTypes.includes(type)
                       )
                       .map(
-                        ({ type, count }) =>
-                          `${type}: ${count} of at least ${partialCoverage.minimumCasesPerType} cases (${partialCoverage.failedTypes.includes(type) ? "AI generation failed" : "below minimum"})`
+                        ({ type, count }) => {
+                          const target =
+                            partialCoverage.targetCaseCounts.find(
+                              (item) => item.type === type
+                            )?.count ?? 0;
+                          if (partialCoverage.failedTypes.includes(type)) {
+                            if (generation.generationMethod === "template-fallback") {
+                              const caseLabel = count === 1 ? "case" : "cases";
+                              return `${type}: AI generation failed; ${count} template fallback ${caseLabel} shown`;
+                            }
+                            return `${type}: AI generation failed; no cases were generated for this category`;
+                          }
+                          return `${type}: ${count} of ${target} planned cases (below target)`;
+                        }
+                      )
+                      .concat(
+                        partialCoverage.notApplicableTypes.map(
+                          (type) => `${type}: AI found no applicable scenarios`
+                        )
+                      )
+                      .concat(
+                        partialCoverage.targetWasCapped
+                          ? ["planned case count was capped at 50; review criterion coverage"]
+                          : []
                       )
                       .join("; ")}
                   </p>

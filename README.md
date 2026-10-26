@@ -81,16 +81,24 @@ Navigate to [http://localhost:3000](http://localhost:3000).
 
 The current version is an MVP.
 
-- Test case generation uses predefined templates.
+- Test case generation uses the configured local Ollama model. The model plans
+  scenarios from independently testable requirement behaviors, so the number
+  of cases can vary even when two tickets contain the same number of criteria.
+- Each planned scenario is linked to one generated case. Missing cases are
+  reported as partial coverage. If Ollama fails, the app labels its generic
+  template suggestions as a fallback; those suggestions are not a content-based
+  scenario plan.
+- Ollama responses use a structured JSON schema and a response token budget
+  derived from the prompt size and context window. The default output ceiling is
+  8,192 tokens and can be changed with `OLLAMA_NUM_PREDICT`.
 - Browser execution currently performs a page-load check rather than executing every generated scenario.
 - Screenshot capture is best-effort and may be unavailable for some websites.
-- Jira integration, AI-powered test generation, and full scenario execution are planned enhancements.
+- Jira integration and full scenario execution are planned enhancements.
 
 ## Roadmap
 
 - [ ] Execute generated scenarios as real Playwright tests.
 - [ ] Add assertions for expected application behavior.
-- [ ] Generate test cases from Jira acceptance criteria using an AI model.
 - [ ] Integrate with the Jira API.
 - [ ] Add downloadable HTML and JSON reports.
 - [ ] Improve failure diagnostics and screenshot evidence.
