@@ -1,4 +1,5 @@
 import { callLLM, MIN_CASES_PER_TYPE } from "@/lib/ai-provider";
+import { deduplicateTestCases as deduplicateCases } from "@/lib/test-case-deduplication";
 import { generateWithTemplates } from "@/lib/template-generator";
 import {
   GenerationResultSchema,
@@ -100,26 +101,10 @@ function isMeaningfulTestCase(testCase: GeneratedTestCase): boolean {
   return true;
 }
 
-function deduplicateTestCases(testCases: GeneratedTestCase[]): GeneratedTestCase[] {
-  const seen = new Set<string>();
-  const uniqueCases: GeneratedTestCase[] = [];
-
-  for (const testCase of testCases) {
-    const key = normalizeText(testCase.title).toLowerCase();
-
-    if (seen.has(key)) {
-      continue;
-    }
-
-    seen.add(key);
-    uniqueCases.push(testCase);
-
-    if (uniqueCases.length >= MAX_TEST_CASES) {
-      break;
-    }
-  }
-
-  return uniqueCases;
+function deduplicateTestCases(
+  testCases: GeneratedTestCase[]
+): GeneratedTestCase[] {
+  return deduplicateCases(testCases).slice(0, MAX_TEST_CASES);
 }
 
 function assignTestCaseIds(testCases: GeneratedTestCase[]): GeneratedTestCase[] {

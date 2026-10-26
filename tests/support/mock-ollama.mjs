@@ -126,6 +126,9 @@ const server = createServer(async (request, response) => {
           expectedResult: "The profile displays the saved name Kavya after reload.",
         }),
       ];
+    } else if (requirement.includes("[[mock:exact-duplicate]]")) {
+      const exactCase = makeCase(type, 1);
+      cases = [exactCase, { ...exactCase }];
     }
 
     content = JSON.stringify(makePayload(type, cases));
