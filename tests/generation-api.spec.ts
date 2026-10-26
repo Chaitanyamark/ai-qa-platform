@@ -73,6 +73,26 @@ test("accepts valid JSON wrapped in Markdown fences", async ({ request }) => {
   expect(getCoverage(body).status).toBe("complete");
 });
 
+test("normalizes object-valued test data before response validation", async ({
+  request,
+}) => {
+  const { response, body } = await generate(
+    request,
+    "Requirement [[mock:testdata-object]]"
+  );
+
+  expect(response.status()).toBe(200);
+  expect(body.generationMethod).toBe("ai");
+  const cases = body.testCases as Array<Record<string, unknown>>;
+  expect(cases).toHaveLength(5);
+  expect(cases[0].testData).toBe(
+    JSON.stringify({
+      email: "qa-user@example.test",
+      password: "Synthetic-Pass-123",
+    })
+  );
+});
+
 test("reports a partial result when a category returns fewer than the minimum", async ({
   request,
 }) => {

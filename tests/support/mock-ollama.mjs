@@ -129,6 +129,11 @@ const server = createServer(async (request, response) => {
     } else if (requirement.includes("[[mock:exact-duplicate]]")) {
       const exactCase = makeCase(type, 1);
       cases = [exactCase, { ...exactCase }];
+    } else if (requirement.includes("[[mock:testdata-object]]")) {
+      cases[0].testData = {
+        email: "qa-user@example.test",
+        password: "Synthetic-Pass-123",
+      };
     }
 
     content = JSON.stringify(makePayload(type, cases));

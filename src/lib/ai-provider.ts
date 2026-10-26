@@ -77,19 +77,23 @@ function normalizeTypes(raw: unknown, types: TestType[]): unknown {
   return {
     ...obj,
     testCases: obj.testCases.map((item) => {
-      if (
-        item &&
-        typeof item === "object" &&
-        typeof (item as { type?: unknown }).type === "string"
-      ) {
-        const canonical = lookup.get(
-          typeKey((item as { type: string }).type)
-        );
-        if (canonical) {
-          return { ...item, type: canonical };
-        }
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return item;
       }
-      return item;
+
+      const testCase = item as Record<string, unknown>;
+      const normalized = { ...testCase };
+
+      if (typeof testCase.type === "string") {
+        const canonical = lookup.get(typeKey(testCase.type));
+        if (canonical) normalized.type = canonical;
+      }
+
+      if (testCase.testData !== null && typeof testCase.testData === "object") {
+        normalized.testData = JSON.stringify(testCase.testData);
+      }
+
+      return normalized;
     }),
   };
 }
