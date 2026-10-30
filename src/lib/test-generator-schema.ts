@@ -109,9 +109,12 @@ export type RequirementCoverageItem = z.infer<
 
 export type GenerationCoverage = {
   requestedTypes: TestType[];
+  targetCaseCounts: Array<{ type: TestType; count: number }>;
   caseCounts: Array<{ type: TestType; count: number }>;
   failedTypes: TestType[];
-  emptyTypes: TestType[];
+  underfilledTypes: TestType[];
+  targetWasCapped: boolean;
+  notApplicableTypes: TestType[];
   missingRequirementIds: string[];
   status: "complete" | "partial";
 };

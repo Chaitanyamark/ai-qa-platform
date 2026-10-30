@@ -844,14 +844,40 @@ export default function Home() {
                   >
                     <strong>Coverage needs review:</strong>{" "}
                     {[
-                      ...partialCoverage.failedTypes.map(
-                        (type) => `${type}: AI generation failed`,
+                      ...partialCoverage.caseCounts
+                        .filter(
+                          ({ type, count }) =>
+                            partialCoverage.failedTypes.includes(type) ||
+                            (partialCoverage.underfilledTypes.includes(type) &&
+                              count <
+                                (partialCoverage.targetCaseCounts.find(
+                                  (item) => item.type === type,
+                                )?.count ?? 0)),
+                        )
+                        .map(({ type, count }) => {
+                          const target =
+                            partialCoverage.targetCaseCounts.find(
+                              (item) => item.type === type,
+                            )?.count ?? 0;
+                          if (partialCoverage.failedTypes.includes(type)) {
+                            if (generation.generationMethod === "template-fallback") {
+                              const caseLabel = count === 1 ? "case" : "cases";
+                              return `${type}: AI generation failed; ${count} template fallback ${caseLabel} shown`;
+                            }
+                            return `${type}: AI generation failed; no cases were generated for this category`;
+                          }
+                          return `${type}: ${count} of ${target} planned cases (below target)`;
+                        }),
+                      ...partialCoverage.notApplicableTypes.map(
+                        (type) => `${type}: AI found no applicable scenarios`,
                       ),
-                      ...partialCoverage.emptyTypes.map(
-                        (type) => `${type}: no applicable cases were generated`,
-                      ),
+                      ...(partialCoverage.targetWasCapped
+                        ? ["planned case count was capped at 50; review criterion coverage"]
+                        : []),
                       ...(partialCoverage.missingRequirementIds.length > 0
-                        ? [`No generated case is linked to: ${partialCoverage.missingRequirementIds.join(", ")}`]
+                        ? [
+                            `No generated case is linked to: ${partialCoverage.missingRequirementIds.join(", ")}`,
+                          ]
                         : []),
                     ].join("; ")}
                   </p>

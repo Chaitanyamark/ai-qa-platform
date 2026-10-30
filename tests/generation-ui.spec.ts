@@ -1,18 +1,27 @@
 import { expect, test } from "@playwright/test";
 
+const mockPort = Number(process.env.MOCK_OLLAMA_PORT) || 11436;
+const mockService = `http://127.0.0.1:${mockPort}`;
+
 test("dashboard sends only the selected test category and renders the result", async ({
   page,
   request,
 }) => {
-  await request.post("http://127.0.0.1:12436/__reset");
-  const requirement =
-    "Acceptance Criteria\n1. A valid profile name saves.\n2. An invalid profile name is rejected.\n3. Repeated saves do not create duplicates. [[mock:short]]";
+  await request.post(mockService + "/__reset");
+  const requirement = [
+    "Profile update [[mock:short]]",
+    "1. The user can change their profile name.",
+    "2. The saved profile name appears in the header.",
+    "3. The saved name remains after reload.",
+    "4. The profile update displays a success message.",
+  ].join("\n");
   await page.goto("/");
   await page.getByLabel("Jira ticket and acceptance criteria").fill(requirement);
 
-  await page.getByRole("checkbox", { name: /Negative/ }).uncheck();
-  await page.getByRole("checkbox", { name: /Edge Cases/ }).uncheck();
-  await expect(page.getByRole("checkbox", { name: /Positive/ })).toBeChecked();
+  const categories = page.locator('input[type="checkbox"]');
+  await expect(categories).toHaveCount(3);
+  await categories.nth(1).uncheck();
+  await categories.nth(2).uncheck();
 
   const generationRequest = page.waitForRequest(
     (candidate) =>
@@ -36,10 +45,13 @@ test("dashboard sends only the selected test category and renders the result", a
   });
   await expect(coverageWarning).toContainText("Coverage needs review");
   await expect(coverageWarning).toContainText(
-    "No generated case is linked to: AC-002, AC-003"
+    "Positive: 1 of 4 planned cases (below target)"
+  );
+  await expect(coverageWarning).toContainText(
+    "No generated case is linked to: AC-002, AC-003, AC-004"
   );
 
-  const statsResponse = await request.get("http://127.0.0.1:12436/__stats");
+  const statsResponse = await request.get(mockService + "/__stats");
   const stats = (await statsResponse.json()) as { totalCalls: number };
   expect(stats.totalCalls).toBe(1);
 });

@@ -1,12 +1,16 @@
 import { expect, test, type APIRequestContext } from "@playwright/test";
 
-const mockService = "http://127.0.0.1:12436";
+const mockPort = Number(process.env.MOCK_OLLAMA_PORT) || 11436;
+const mockService = `http://127.0.0.1:${mockPort}`;
 
 type Coverage = {
   requestedTypes: string[];
+  targetCaseCounts: Array<{ type: string; count: number }>;
   caseCounts: Array<{ type: string; count: number }>;
   failedTypes: string[];
-  emptyTypes: string[];
+  underfilledTypes: string[];
+  targetWasCapped: boolean;
+  notApplicableTypes: string[];
   missingRequirementIds: string[];
   status: "complete" | "partial";
 };
@@ -41,40 +45,71 @@ test.beforeEach(async ({ request }) => {
   await resetMock(request);
 });
 
-test("creates one criterion-specific manual case per acceptance criterion when AI is unavailable", async ({
+test("links cases to supplied criteria and reports criteria without a generated case", async ({
   request,
 }) => {
-  const { response, body } = await generate(
-    request,
-    "Acceptance Criteria\n1. Valid registration displays a success message.\n2. Invalid email is rejected with an appropriate validation message.\n3. Leading and trailing whitespace in email is handled correctly.\n4. Confirm password mismatch is rejected with clear feedback. [[mock:provider-error]]",
-    ["Positive", "Negative", "Edge Cases"],
-  );
+  const ticket = [
+    "Acceptance Criteria",
+    "1. The profile heading is displayed.",
+    "2. The settings link is displayed.",
+    "3. The profile page has a help link.",
+    "[[mock:short]]",
+  ].join("\n");
+  const { response, body } = await generate(request, ticket);
+
+  expect(response.status()).toBe(200);
+  expect(body.testCases).toHaveLength(1);
+  expect(body.requirementCoverage).toMatchObject([
+    {
+      requirementId: "AC-001",
+      testCaseIds: ["TC001"],
+      status: "linked",
+    },
+    { requirementId: "AC-002", testCaseIds: [], status: "missing" },
+    { requirementId: "AC-003", testCaseIds: [], status: "missing" },
+  ]);
+  expect(getCoverage(body).missingRequirementIds).toEqual([
+    "AC-002",
+    "AC-003",
+  ]);
+});
+
+test("labels fallback cases manual and keeps criterion links when Ollama fails", async ({
+  request,
+}) => {
+  const ticket = [
+    "Acceptance Criteria",
+    "1. Valid registration displays a success message.",
+    "2. Invalid email is rejected with a validation message.",
+    "[[mock:provider-error]]",
+  ].join("\n");
+  const { response, body } = await generate(request, ticket, [
+    "Positive",
+    "Negative",
+    "Edge Cases",
+  ]);
 
   expect(response.status()).toBe(200);
   expect(body.generationMethod).toBe("template-fallback");
   const cases = body.testCases as Array<Record<string, unknown>>;
-  expect(cases).toHaveLength(4);
+  expect(cases).toHaveLength(2);
   expect(cases.map((item) => item.requirementRef)).toEqual([
     "AC-001",
     "AC-002",
-    "AC-003",
-    "AC-004",
   ]);
-  expect(cases.map((item) => item.type)).toEqual([
-    "Positive",
-    "Negative",
-    "Edge Cases",
-    "Negative",
-  ]);
-  expect(cases.every((item) => (item.automationPlan as { mode?: string }).mode === "manual")).toBeTruthy();
+  expect(
+    cases.every(
+      (item) =>
+        (item.automationPlan as { mode?: string }).mode === "manual",
+    ),
+  ).toBeTruthy();
   expect(body.requirementCoverage).toMatchObject([
     { requirementId: "AC-001", status: "linked" },
     { requirementId: "AC-002", status: "linked" },
-    { requirementId: "AC-003", status: "linked" },
-    { requirementId: "AC-004", status: "linked" },
   ]);
 });
-test("reports a requirement-driven case count without a category minimum", async ({ request }) => {
+
+test("reports complete coverage when every model-planned scenario is generated", async ({ request }) => {
   const { response, body } = await generate(request, "A simple profile requirement");
 
   expect(response.status()).toBe(200);
@@ -86,61 +121,134 @@ test("reports a requirement-driven case count without a category minimum", async
   expect(cases.every((item) => item.type === "Positive")).toBeTruthy();
   expect(cases[0].id).toBe("TC001");
   expect(cases[0].steps).toHaveLength(4);
-  expect(cases[0].automationPlan).toMatchObject({
-    mode: "manual",
-    reason: expect.any(String),
-  });
 
   expect(getCoverage(body)).toMatchObject({
     status: "complete",
-    emptyTypes: [],
-    missingRequirementIds: [],
+    targetCaseCounts: [{ type: "Positive", count: 1 }],
     caseCounts: [{ type: "Positive", count: 1 }],
   });
 });
 
-test("returns different counts for equally sized criteria with different complexity", async ({
+test("uses the model scenario plan for positive, negative and edge coverage", async ({
   request,
 }) => {
-  const simple = await generate(
-    request,
-    "Acceptance Criteria\n1. The profile heading is displayed.",
-  );
-  const complex = await generate(
-    request,
-    "Acceptance Criteria\n1. The profile supports saving a valid name, rejects invalid lengths, and prevents a duplicate submission. [[mock:complex]]",
-  );
-
-  expect((simple.body.testCases as unknown[])).toHaveLength(1);
-  expect((complex.body.testCases as unknown[])).toHaveLength(5);
-  expect((await getStats(request)).lastPrompt).toContain(
-    "Do not use a fixed count, minimum, or quota per category.",
-  );
-});
-
-test("builds requirement-level links from the supplied acceptance criteria", async ({
-  request,
-}) => {
-  const { response, body } = await generate(
-    request,
-    "Acceptance Criteria\n1. The page shows the profile heading.\n2. The page shows the settings link.",
-  );
+  const ticket = [
+    "Registration acceptance criteria:",
+    "1. The user can register with valid details.",
+    "2. Registration must reject an invalid email address.",
+    "3. Leading and trailing whitespace is trimmed from the email.",
+  ].join("\n");
+  const { response, body } = await generate(request, ticket, [
+    "Positive",
+    "Negative",
+    "Edge Cases",
+  ]);
 
   expect(response.status()).toBe(200);
-  expect(body.requirementCoverage).toEqual([
-    {
-      requirementId: "AC-001",
-      criterion: "The page shows the profile heading.",
-      testCaseIds: ["TC001"],
-      status: "linked",
+  expect(body.generationMethod).toBe("ai");
+  expect(body.testCases).toHaveLength(5);
+  expect(getCoverage(body)).toMatchObject({
+    status: "complete",
+    targetCaseCounts: [
+      { type: "Positive", count: 3 },
+      { type: "Negative", count: 1 },
+      { type: "Edge Cases", count: 1 },
+    ],
+    caseCounts: [
+      { type: "Positive", count: 3 },
+      { type: "Negative", count: 1 },
+      { type: "Edge Cases", count: 1 },
+    ],
+  });
+});
+
+test("asks the model whether a category applies instead of guessing from keywords", async ({
+  request,
+}) => {
+  const ticket = [
+    "1. The user can update their profile name.",
+    "2. The saved name appears in the profile header.",
+  ].join("\n");
+  const { response, body } = await generate(request, ticket, ["Negative"]);
+
+  expect(response.status()).toBe(200);
+  expect(body.generationMethod).toBe("ai");
+  expect(body.testCases).toEqual([]);
+  expect(getCoverage(body)).toMatchObject({
+    status: "partial",
+    targetCaseCounts: [{ type: "Negative", count: 0 }],
+    caseCounts: [{ type: "Negative", count: 0 }],
+    notApplicableTypes: ["Negative"],
+  });
+
+  const stats = await getStats(request);
+  expect(stats.totalCalls).toBe(1);
+  const prompts = stats.lastPromptsByType as Record<string, string>;
+  expect(prompts.Negative).toContain("Do not use a fixed count");
+  expect(prompts.Negative).toContain("independently testable");
+  expect(prompts.Negative).not.toMatch(/at least \d+ distinct test cases/i);
+});
+
+test("caps an oversized model scenario plan and reports the cap", async ({ request }) => {
+  const ticket = Array.from(
+    { length: 52 },
+    (_, index) => `${index + 1}. The user can complete scenario ${index + 1}.`
+  ).join("\n");
+  const { response, body } = await generate(request, ticket);
+
+  expect(response.status()).toBe(200);
+  expect(body.generationMethod).toBe("ai");
+  expect(body.testCases).toHaveLength(50);
+  expect(getCoverage(body)).toMatchObject({
+    status: "partial",
+    targetCaseCounts: [{ type: "Positive", count: 52 }],
+    targetWasCapped: true,
+  });
+
+  const stats = await getStats(request);
+  const schemaFormats = stats.schemaFormatByType as Record<string, unknown>;
+  expect(schemaFormats.Positive).toMatchObject({
+    type: "object",
+    properties: {
+      plannedScenarios: { type: "array" },
+      testCases: { type: "array" },
     },
-    {
-      requirementId: "AC-002",
-      criterion: "The page shows the settings link.",
-      testCaseIds: ["TC002"],
-      status: "linked",
-    },
+  });
+  const responseBudgets = stats.numPredictByType as Record<string, number>;
+  expect(responseBudgets.Positive).toBeGreaterThan(4096);
+});
+
+test("different 15-criterion tickets can produce different planned case counts", async ({
+  request,
+}) => {
+  const straightforward = Array.from(
+    { length: 15 },
+    (_, index) => `${index + 1}. Reject an invalid token for resource ${index + 1}.`
+  ).join("\n");
+  const multiCondition = Array.from(
+    { length: 15 },
+    (_, index) =>
+      `${index + 1}. Reject an invalid token and an expired token for resource ${index + 1}.`
+  ).join("\n");
+
+  const first = await generate(request, straightforward, ["Negative"]);
+  const second = await generate(request, multiCondition, ["Negative"]);
+
+  expect(first.response.status()).toBe(200);
+  expect(second.response.status()).toBe(200);
+  expect(first.body.generationMethod).toBe("ai");
+  expect(second.body.generationMethod).toBe("ai");
+  expect(first.body.testCases).toHaveLength(15);
+  expect(second.body.testCases).toHaveLength(30);
+  expect(getCoverage(first.body).targetCaseCounts).toEqual([
+    { type: "Negative", count: 15 },
   ]);
+  expect(getCoverage(second.body).targetCaseCounts).toEqual([
+    { type: "Negative", count: 30 },
+  ]);
+  expect(getCoverage(first.body).status).toBe("complete");
+  expect(getCoverage(second.body).status).toBe("complete");
+
 });
 
 test("accepts valid JSON wrapped in Markdown fences", async ({ request }) => {
@@ -175,22 +283,42 @@ test("normalizes object-valued test data before response validation", async ({
   );
 });
 
-test("reports missing criteria when variable output does not link every criterion", async ({
+test("fills a generic requirement reference when the model omits it", async ({
   request,
 }) => {
   const { response, body } = await generate(
     request,
-    "Acceptance Criteria\n1. A valid profile name is saved.\n2. An invalid profile name is rejected.\n3. Repeated saves do not create duplicates.\n4. A success message is shown. [[mock:short]]",
+    "Requirement [[mock:missing-requirement-ref]]"
   );
+
+  expect(response.status()).toBe(200);
+  expect(body.generationMethod).toBe("ai");
+  const cases = body.testCases as Array<Record<string, unknown>>;
+  expect(cases).toHaveLength(1);
+  expect(cases.every((item) => item.requirementRef === "Supplied requirement")).toBeTruthy();
+  expect(getCoverage(body).status).toBe("complete");
+});
+
+test("reports a partial result when a category returns fewer than its dynamic target", async ({
+  request,
+}) => {
+  const ticket = [
+    "Requirement [[mock:short]]",
+    "1. A valid account is registered.",
+    "2. A success message is displayed.",
+    "3. The account details are saved.",
+    "4. The profile header shows the user's name.",
+  ].join("\n");
+  const { response, body } = await generate(request, ticket);
 
   expect(response.status()).toBe(200);
   expect(body.generationMethod).toBe("ai");
   expect(body.testCases).toHaveLength(1);
   expect(getCoverage(body)).toMatchObject({
     status: "partial",
+    targetCaseCounts: [{ type: "Positive", count: 4 }],
+    underfilledTypes: ["Positive"],
     failedTypes: [],
-    emptyTypes: [],
-    missingRequirementIds: ["AC-002", "AC-003", "AC-004"],
     caseCounts: [{ type: "Positive", count: 1 }],
   });
 
@@ -198,49 +326,38 @@ test("reports missing criteria when variable output does not link every criterio
   expect(stats.totalCalls).toBe(1);
 });
 
-test("keeps a valid empty category as partial AI output instead of inventing fallback cases", async ({
-  request,
-}) => {
-  const { response, body } = await generate(
-    request,
-    "Acceptance Criteria\n1. The requested behavior is not part of this feature. [[mock:no-scenarios]]",
-  );
-
-  expect(response.status()).toBe(200);
-  expect(body.generationMethod).toBe("ai");
-  expect(body.testCases).toEqual([]);
-  expect(getCoverage(body)).toMatchObject({
-    status: "partial",
-    emptyTypes: ["Positive"],
-    missingRequirementIds: ["AC-001"],
-  });
-});
-
 test("reports a failed category while preserving successful categories", async ({
   request,
 }) => {
   const { response, body } = await generate(
     request,
-    "Requirement [[mock:partial]]",
+    [
+      "Requirement [[mock:partial]]",
+      "1. A valid profile can be saved.",
+      "2. An invalid email is rejected.",
+    ].join("\n"),
     ["Positive", "Negative", "Edge Cases"]
   );
 
   expect(response.status()).toBe(200);
   expect(body.generationMethod).toBe("ai");
   const cases = body.testCases as Array<Record<string, unknown>>;
-  expect([...new Set(cases.map((item) => item.type))]).toEqual([
-    "Positive",
-    "Edge Cases",
-  ]);
+  expect([...new Set(cases.map((item) => item.type))]).toEqual(["Positive"]);
   expect(getCoverage(body)).toMatchObject({
     status: "partial",
     requestedTypes: ["Positive", "Negative", "Edge Cases"],
-    failedTypes: ["Negative"],
-    emptyTypes: [],
-    caseCounts: [
-      { type: "Positive", count: 1 },
+    targetCaseCounts: [
+      { type: "Positive", count: 2 },
       { type: "Negative", count: 0 },
-      { type: "Edge Cases", count: 1 },
+      { type: "Edge Cases", count: 0 },
+    ],
+    failedTypes: ["Negative"],
+    underfilledTypes: [],
+    notApplicableTypes: ["Edge Cases"],
+    caseCounts: [
+      { type: "Positive", count: 2 },
+      { type: "Negative", count: 0 },
+      { type: "Edge Cases", count: 0 },
     ],
   });
 
@@ -253,7 +370,13 @@ test("preserves distinct cases with identical titles", async ({
 }) => {
   const { response, body } = await generate(
     request,
-    "Requirement [[mock:duplicate-title]]"
+    [
+      "Requirement [[mock:duplicate-title]]",
+      "1. The profile can be edited.",
+      "2. The profile can be saved.",
+      "3. The profile shows the saved value.",
+      "4. The profile remains updated after reload.",
+    ].join("\n")
   );
 
   expect(response.status()).toBe(200);
@@ -264,8 +387,9 @@ test("preserves distinct cases with identical titles", async ({
     "Display name: Kavya",
   ]);
   expect(getCoverage(body)).toMatchObject({
-    status: "complete",
-    emptyTypes: [],
+    status: "partial",
+    targetCaseCounts: [{ type: "Positive", count: 4 }],
+    underfilledTypes: ["Positive"],
     caseCounts: [{ type: "Positive", count: 2 }],
   });
 });
@@ -281,7 +405,6 @@ test("removes exact duplicate test cases", async ({ request }) => {
   expect(getCoverage(body).caseCounts).toEqual([
     { type: "Positive", count: 1 },
   ]);
-  expect(getCoverage(body).status).toBe("complete");
 });
 
 test("preserves all valid cases when the model returns many", async ({
@@ -296,6 +419,37 @@ test("preserves all valid cases when the model returns many", async ({
   expect(getCoverage(body).caseCounts).toEqual([
     { type: "Positive", count: 12 },
   ]);
+});
+
+test("keeps a valid case and downgrades an unsupported browser plan to manual", async ({
+  request,
+}) => {
+  const { response, body } = await generate(
+    request,
+    "Requirement [[mock:invalid-automation]]",
+  );
+
+  expect(response.status()).toBe(200);
+  expect(body.generationMethod).toBe("ai");
+  expect(body.testCases).toHaveLength(1);
+  expect((body.testCases as Array<Record<string, unknown>>)[0].automationPlan)
+    .toMatchObject({
+      mode: "manual",
+      reason: expect.stringContaining("supported browser actions"),
+    });
+});
+
+test("uses the manual template fallback after an Ollama timeout without retrying", async ({
+  request,
+}) => {
+  const { response, body } = await generate(request, "Requirement [[mock:timeout]]");
+
+  expect(response.status()).toBe(200);
+  expect(body.generationMethod).toBe("template-fallback");
+  expect(getCoverage(body).failedTypes).toEqual(["Positive"]);
+
+  const stats = await getStats(request);
+  expect(stats.totalCalls).toBe(1);
 });
 
 for (const scenario of [
@@ -323,39 +477,6 @@ for (const scenario of [
     expect(stats.totalCalls).toBe(2);
   });
 }
-
-test("uses the template fallback after a provider timeout without retrying", async ({
-  request,
-}) => {
-  const { response, body } = await generate(
-    request,
-    "Requirement [[mock:timeout]]",
-  );
-
-  expect(response.status()).toBe(200);
-  expect(body.generationMethod).toBe("template-fallback");
-  expect(getCoverage(body).failedTypes).toEqual(["Positive"]);
-
-  const stats = await getStats(request);
-  expect(stats.totalCalls).toBe(1);
-});
-
-test("keeps valid generated cases and marks an unsupported action plan manual", async ({
-  request,
-}) => {
-  const { response, body } = await generate(
-    request,
-    "Requirement [[mock:invalid-automation]]",
-  );
-
-  expect(response.status()).toBe(200);
-  expect(body.generationMethod).toBe("ai");
-  expect(body.testCases).toHaveLength(1);
-  expect((body.testCases as Array<Record<string, unknown>>)[0].automationPlan).toMatchObject({
-    mode: "manual",
-    reason: expect.stringContaining("supported browser actions"),
-  });
-});
 
 test("uses the template fallback immediately for provider HTTP errors", async ({
   request,

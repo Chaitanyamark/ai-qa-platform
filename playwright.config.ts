@@ -1,26 +1,14 @@
 import { defineConfig } from "@playwright/test";
 
 const useInstalledChrome = process.env.PLAYWRIGHT_CHANNEL === "chrome";
-const localWebServers = [
-  {
-    command: "node tests/support/mock-ollama.mjs",
-    url: "http://127.0.0.1:12436/health",
-    reuseExistingServer: !process.env.CI,
-    timeout: 10_000,
-  },
-  {
-    command: "npx next dev --webpack --hostname=127.0.0.1 --port=33213",
-    url: "http://127.0.0.1:33213",
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-    env: {
-      QA_PLAYWRIGHT_BUILD_DIR: ".next-qa",
-      OLLAMA_URL: "http://127.0.0.1:12436",
-      OLLAMA_MODEL: "qa-mock",
-      OLLAMA_TIMEOUT_MS: "3000",
-    },
-  },
-];
+const appPort = Number(process.env.PLAYWRIGHT_PORT) || 3210;
+const mockPort = Number(process.env.MOCK_OLLAMA_PORT) || 11436;
+const appUrl = `http://127.0.0.1:${appPort}`;
+const baseUrl = process.env.PLAYWRIGHT_BASE_URL || appUrl;
+const nextCommand =
+  process.platform === "win32"
+    ? ".\\node_modules\\.bin\\next.cmd"
+    : "./node_modules/.bin/next";
 
 export default defineConfig({
   testDir: "./tests",
@@ -31,12 +19,37 @@ export default defineConfig({
   timeout: 30_000,
   use: {
     ...(useInstalledChrome ? { channel: "chrome" } : {}),
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:33213",
+    baseURL: baseUrl,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  // Unit-style proxy/schema tests do not need the local app or mock provider.
+  // Unit-style proxy/schema tests can opt out of starting the app and mock.
   ...(process.env.QA_SKIP_WEB_SERVER === "1"
     ? {}
-    : { webServer: localWebServers }),
+    : {
+        webServer: [
+          {
+            command: "node tests/support/mock-ollama.mjs",
+            url: `http://127.0.0.1:${mockPort}/health`,
+            reuseExistingServer: !process.env.CI,
+            timeout: 10_000,
+            env: {
+              MOCK_OLLAMA_PORT: String(mockPort),
+            },
+          },
+          {
+            command: `${nextCommand} dev --hostname 127.0.0.1 --port ${appPort}`,
+            url: appUrl,
+            reuseExistingServer: !process.env.CI,
+            timeout: 120_000,
+            env: {
+              OLLAMA_URL: `http://127.0.0.1:${mockPort}`,
+              OLLAMA_MODEL: "qa-mock",
+              OLLAMA_TIMEOUT_MS: "3000",
+              NEXT_DIST_DIR: ".next-playwright",
+              QA_PLAYWRIGHT_BUILD_DIR: ".next-playwright",
+            },
+          },
+        ],
+      }),
 });

@@ -2,7 +2,8 @@ import { expect, test } from "@playwright/test";
 import { executeTestCase } from "../src/lib/browser-test-executor";
 import type { TestCase } from "../src/lib/test-generator-schema";
 
-const mockService = "http://127.0.0.1:12436";
+const mockPort = Number(process.env.MOCK_OLLAMA_PORT) || 11436;
+const mockService = `http://127.0.0.1:${mockPort}`;
 
 function makeCase(automationPlan: TestCase["automationPlan"]): TestCase {
   return {

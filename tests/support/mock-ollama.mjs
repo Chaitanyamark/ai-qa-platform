@@ -1,17 +1,104 @@
 import { createServer } from "node:http";
 
-const port = 12436;
-const state = { totalCalls: 0, callsByType: {}, lastPrompt: "" };
+const port = Number(process.env.MOCK_OLLAMA_PORT) || 11435;
+const state = {
+  totalCalls: 0,
+  callsByType: {},
+  lastPromptsByType: {},
+  schemaFormatByType: {},
+  numPredictByType: {},
+};
 
 function sendJson(response, status, body) {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(body));
 }
 
-function makeCase(type, index, options = {}) {
+function extractCriteria(requirement) {
+  const listed = requirement
+    .split(/\r?\n/)
+    .flatMap((line) => {
+      const match = line.match(/^\s*(\d+)[.)]\\?\s+(.+)$/);
+      return match ? [{ reference: "AC-" + match[1], text: match[2].trim() }] : [];
+    });
+
+  if (listed.length > 0) return listed;
+
+  const text = requirement
+    .replace(/\[\[mock:[^\]]+\]\]/g, "")
+    .replace(/^\s*#+\s*/gm, "")
+    .trim();
+
+  return text ? [{ reference: "Supplied requirement", text }] : [];
+}
+
+// This deterministic mock stands in for the model's semantic scenario planner.
+// It deliberately splits independent negative conditions in the 15-criterion
+// regression fixture; production code does not use these keyword rules.
+function planScenarios(type, requirement) {
+  if (requirement.includes("[[mock:many]]")) {
+    return Array.from({ length: 12 }, (_, index) => ({
+      scenarioId: type.replace(/\W/g, "") + "-S" + (index + 1),
+      requirementRef: "Supplied requirement",
+      objective: "Mock scenario " + (index + 1),
+    }));
+  }
+
+  const criteria = extractCriteria(requirement);
+  const scenarios = [];
+
+  for (const criterion of criteria) {
+    const text = criterion.text;
+    let applies = false;
+
+    if (type === "Positive") {
+      applies = true;
+    } else if (type === "Negative") {
+      applies = /\b(invalid|reject|rejected|required|missing|duplicate|already|fail|error|mismatch|incorrect|expired|blank|malformed)\b/i.test(text);
+    } else if (type === "Edge Cases") {
+      applies = /\b(boundary|minimum|maximum|limit|whitespace|leading|trailing|retry|repeated|loading|timeout|concurrent|multiple)\b/i.test(text);
+    } else if (type === "Integration") {
+      applies = /\b(api|server|backend|database|service|network)\b/i.test(text);
+    } else if (type === "Security") {
+      applies = /\b(security|password|credential|authentication|authorization|permission)\b/i.test(text);
+    } else if (type === "Usability") {
+      applies = /\b(message|feedback|loading|retry|accessible|mask|guidance)\b/i.test(text);
+    } else if (type === "Compatibility") {
+      applies = /\b(browser|device|mobile|viewport|responsive|screen size)\b/i.test(text);
+    }
+
+    if (!applies) continue;
+
+    const conditions =
+      type === "Negative"
+        ? text.split(/\s+and\s+(?=(?:(?:an?|the)\s+)?(?:invalid|expired|missing|duplicate|already|blank|malformed|incorrect))/i)
+        : [text];
+
+    conditions.forEach((condition, index) => {
+      const scenarioIndex = scenarios.length + 1;
+      scenarios.push({
+        scenarioId:
+          type.replace(/\W/g, "") +
+          "-" +
+          criterion.reference.replace(/\W/g, "") +
+          "-" +
+          index,
+        requirementRef: criterion.reference,
+        objective: condition.trim() || "Criterion behavior " + scenarioIndex,
+      });
+    });
+  }
+
+  return scenarios;
+}
+
+function makeCase(type, scenario, index, options = {}) {
   return {
     id: "MOCK" + String(index).padStart(3, "0"),
-    title: options.title || type + " scenario " + index + " checks a distinct behavior",
+    scenarioId: scenario.scenarioId,
+    title:
+      options.title ||
+      type + " scenario " + index + " verifies " + scenario.objective,
     type,
     priority: "Medium",
     preconditions: ["The test environment is available to the user."],
@@ -25,14 +112,15 @@ function makeCase(type, index, options = {}) {
     expectedResult:
       options.expectedResult ||
       "The page displays the expected result for scenario " + index + ".",
-    requirementRef: "REQ-1",
+    requirementRef: scenario.requirementRef,
   };
 }
 
-function makePayload(type, cases) {
+function makePayload(type, plannedScenarios, cases) {
   return {
     summary: "Deterministic mock response for " + type + ".",
     openQuestions: [],
+    plannedScenarios,
     testCases: cases,
   };
 }
@@ -51,7 +139,9 @@ const server = createServer(async (request, response) => {
   if (request.method === "POST" && request.url === "/__reset") {
     state.totalCalls = 0;
     state.callsByType = {};
-    state.lastPrompt = "";
+    state.lastPromptsByType = {};
+    state.schemaFormatByType = {};
+    state.numPredictByType = {};
     return sendJson(response, 200, { reset: true });
   }
 
@@ -71,16 +161,16 @@ const server = createServer(async (request, response) => {
   }
 
   const prompt = String(body?.messages?.[1]?.content || "");
-  const match = prompt.match(/distinct test cases of type "([^"]+)"/i);
+  const match = prompt.match(/test cases of type "([^"]+)"/i);
   const type = match?.[1] || "Positive";
-  const requirement = prompt.match(/<requirement>\s*([\s\S]*?)\s*<\/requirement>/i)?.[1] || "";
-  const requirementIds = [...prompt.matchAll(/^\s*-\s*((?:AC|REQ)-\d+):/gm)].map(
-    (entry) => entry[1],
-  );
+  const requirement =
+    prompt.match(/<requirement>\s*([\s\S]*?)\s*<\/requirement>/i)?.[1] || "";
 
   state.totalCalls += 1;
   state.callsByType[type] = (state.callsByType[type] || 0) + 1;
-  state.lastPrompt = prompt;
+  state.lastPromptsByType[type] = prompt;
+  state.schemaFormatByType[type] = body?.format;
+  state.numPredictByType[type] = body?.options?.num_predict;
 
   if (requirement.includes("[[mock:provider-error]]")) {
     return sendJson(response, 503, { error: "Deterministic provider error." });
@@ -92,27 +182,36 @@ const server = createServer(async (request, response) => {
 
   let content;
   let doneReason = "stop";
+  const plannedScenarios = planScenarios(type, requirement);
 
   if (requirement.includes("[[mock:malformed]]")) {
     content = '{"testCases": [}';
   } else if (requirement.includes("[[mock:empty]]")) {
     content = "";
-  } else if (requirement.includes("[[mock:no-scenarios]]")) {
-    content = JSON.stringify({
-      summary: "No distinct scenario of this type is justified by the requirement.",
-      openQuestions: ["No behavior for this test category is specified."],
-      testCases: [],
-    });
   } else if (requirement.includes("[[mock:missing-field]]")) {
-    const item = makeCase(type, 1);
+    const item = makeCase(type, plannedScenarios[0], 1);
     delete item.expectedResult;
-    content = JSON.stringify(makePayload(type, [item]));
+    content = JSON.stringify(
+      makePayload(type, plannedScenarios, [item])
+    );
+  } else if (requirement.includes("[[mock:missing-requirement-ref]]")) {
+    const item = makeCase(type, plannedScenarios[0], 1);
+    delete item.requirementRef;
+    content = JSON.stringify(
+      makePayload(type, plannedScenarios, [item])
+    );
   } else if (requirement.includes("[[mock:unexpected-type]]")) {
-    const item = makeCase(type, 1);
+    const item = makeCase(type, plannedScenarios[0], 1);
     item.steps = "not-an-array";
-    content = JSON.stringify(makePayload(type, [item]));
+    content = JSON.stringify(
+      makePayload(type, plannedScenarios, [item])
+    );
   } else if (requirement.includes("[[mock:truncated]]")) {
-    content = JSON.stringify(makePayload(type, [makeCase(type, 1)]));
+    content = JSON.stringify(
+      makePayload(type, plannedScenarios, [
+        makeCase(type, plannedScenarios[0], 1),
+      ])
+    );
     doneReason = "length";
   } else if (
     requirement.includes("[[mock:partial]]") &&
@@ -120,64 +219,60 @@ const server = createServer(async (request, response) => {
   ) {
     content = '{"testCases": [}';
   } else {
-    let count = Math.max(1, requirementIds.length);
-    if (requirement.includes("[[mock:short]]")) count = 1;
-    if (requirement.includes("[[mock:many]]")) count = 12;
-    if (requirement.includes("[[mock:complex]]")) {
-      count = Math.min(50, Math.max(1, requirementIds.length) + 4);
+    let scenarios = plannedScenarios;
+    if (requirement.includes("[[mock:duplicate-title]]")) {
+      scenarios = plannedScenarios.slice(0, 4);
     }
 
-    let cases = Array.from({ length: count }, (_, index) =>
-      makeCase(type, index + 1)
+    let cases = scenarios.map((scenario, index) =>
+      makeCase(type, scenario, index + 1)
     );
 
-    if (requirement.includes("[[mock:duplicate-title]]")) {
-      cases = [
-        makeCase(type, 1, {
-          title: "Verify that a valid profile update is saved",
-          testData: "Display name: Asha",
-          expectedResult: "The profile displays the saved name Asha after reload.",
-        }),
-        makeCase(type, 2, {
-          title: "Verify that a valid profile update is saved",
-          testData: "Display name: Kavya",
-          expectedResult: "The profile displays the saved name Kavya after reload.",
-        }),
-      ];
-    } else if (requirement.includes("[[mock:exact-duplicate]]")) {
-      const exactCase = makeCase(type, 1);
-      cases = [exactCase, { ...exactCase }];
-    } else if (requirement.includes("[[mock:testdata-object]]")) {
-      cases[0].testData = {
-        email: "qa-user@example.test",
-        password: "Synthetic-Pass-123",
-      };
-    }
-
-    if (requirement.includes("[[mock:automatable]]")) {
-      cases[0].automationPlan = {
-        mode: "automated",
-        actions: [
-          { action: "assert-text", text: "Execution harness ready" },
-        ],
-      };
-    } else if (requirement.includes("[[mock:invalid-automation]]")) {
+    if (requirement.includes("[[mock:invalid-automation]]") && cases.length > 0) {
       cases[0].automationPlan = {
         mode: "automated",
         actions: [{ action: "run-javascript", code: "unsafe" }],
       };
     }
 
-    if (requirementIds.length > 0) {
-      cases = cases.map((item, index) => ({
-        ...item,
-        requirementRef: requirementIds[index % requirementIds.length],
-      }));
+    if (requirement.includes("[[mock:short]]")) {
+      cases = cases.slice(0, 1);
     }
 
-    content = JSON.stringify(makePayload(type, cases));
+    if (requirement.includes("[[mock:duplicate-title]]")) {
+      cases = [
+        makeCase(type, scenarios[0], 1, {
+          title: "Verify that a valid profile update is saved",
+          testData: "Display name: Asha",
+          expectedResult: "The profile displays the saved name Asha after reload.",
+        }),
+        makeCase(type, scenarios[1], 2, {
+          title: "Verify that a valid profile update is saved",
+          testData: "Display name: Kavya",
+          expectedResult: "The profile displays the saved name Kavya after reload.",
+        }),
+      ];
+    } else if (requirement.includes("[[mock:exact-duplicate]]")) {
+      const scenario = scenarios[0];
+      const exactCase = makeCase(type, scenario, 1);
+      cases = [exactCase, { ...exactCase, id: "MOCK002" }];
+    } else if (
+      requirement.includes("[[mock:testdata-object]]") &&
+      cases.length > 0
+    ) {
+      cases[0].testData = {
+        email: "qa-user@example.test",
+        password: "Synthetic-Pass-123",
+      };
+    }
+
+    content = JSON.stringify(makePayload(type, scenarios, cases));
     if (requirement.includes("[[mock:fenced]]")) {
-      content = String.fromCharCode(96).repeat(3) + "json\n" + content + "\n" +
+      content =
+        String.fromCharCode(96).repeat(3) +
+        "json\n" +
+        content +
+        "\n" +
         String.fromCharCode(96).repeat(3);
     }
   }

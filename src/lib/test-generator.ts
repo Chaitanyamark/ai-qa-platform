@@ -191,30 +191,40 @@ function filterSelectedTypes(
 function buildCoverage(
   requestedTypes: GeneratedTestType[],
   testCases: GeneratedTestCase[],
+  targetCaseCounts: Array<{ type: GeneratedTestType; count: number }>,
   failedTypes: GeneratedTestType[] = [],
-  reportedEmptyTypes: GeneratedTestType[] = [],
+  targetWasCapped = false,
+  notApplicableTypes: GeneratedTestType[] = [],
   missingRequirementIds: string[] = [],
 ): GenerationCoverage {
   const caseCounts = requestedTypes.map((type) => ({
     type,
     count: testCases.filter((testCase) => testCase.type === type).length,
   }));
-  const emptyTypes = requestedTypes.filter(
-    (type) =>
-      !failedTypes.includes(type) &&
-      (reportedEmptyTypes.includes(type) ||
-        !testCases.some((testCase) => testCase.type === type)),
-  );
+  const underfilledTypes = caseCounts
+    .filter(
+      ({ type, count }) =>
+        count <
+          (targetCaseCounts.find((target) => target.type === type)?.count ?? 0) &&
+        !failedTypes.includes(type) &&
+        !notApplicableTypes.includes(type)
+    )
+    .map(({ type }) => type);
 
   return {
     requestedTypes,
+    targetCaseCounts,
     caseCounts,
     failedTypes,
-    emptyTypes,
+    underfilledTypes,
+    targetWasCapped,
+    notApplicableTypes,
     missingRequirementIds,
     status:
       failedTypes.length > 0 ||
-      emptyTypes.length > 0 ||
+      underfilledTypes.length > 0 ||
+      targetWasCapped ||
+      notApplicableTypes.length > 0 ||
       missingRequirementIds.length > 0
         ? "partial"
         : "complete",
@@ -305,15 +315,26 @@ export async function generateTestCasesWithAI(
     const detailedCases = uniqueCases.filter(isMeaningfulTestCase);
     console.log("[testgen] after meaningful filter:", detailedCases.length);
 
-    if (detailedCases.length === 0 && validated.testCases.length > 0) {
-      throw new Error(
-        `The AI returned no sufficiently detailed test cases ` +
-          `(raw: ${validated.testCases.length}, ` +
-          `after type filter: ${selectedCases.length}, ` +
-          `after dedupe: ${uniqueCases.length}, ` +
-          `after detail filter: 0). ` +
-          "Review the AI prompt in src/lib/ai-provider.ts."
-      );
+    if (detailedCases.length === 0) {
+      const requirementCoverage = buildRequirementCoverage(requirements, []);
+      const missingRequirementIds = requirementCoverage
+        .filter((item) => item.status === "missing")
+        .map((item) => item.requirementId);
+      return {
+        ...validated,
+        testCases: [],
+        requirementCoverage,
+        generationMethod: "ai",
+        coverage: buildCoverage(
+          selectedTypes,
+          [],
+          raw.targetCaseCounts,
+          raw.failedTypes,
+          raw.targetWasCapped,
+          raw.notApplicableTypes,
+          missingRequirementIds,
+        ),
+      };
     }
 
     const testCases = assignTestCaseIds(detailedCases);
@@ -330,8 +351,10 @@ export async function generateTestCasesWithAI(
       coverage: buildCoverage(
         selectedTypes,
         testCases,
+        raw.targetCaseCounts,
         raw.failedTypes,
-        raw.emptyTypes,
+        raw.targetWasCapped,
+        raw.notApplicableTypes,
         missingRequirementIds,
       ),
     };
@@ -344,7 +367,6 @@ export async function generateTestCasesWithAI(
     const fallback = GenerationResultSchema.parse(
       generateWithTemplates(requirement)
     );
-
     const selectedFallbackCases = filterSelectedTypes(
       fallback.testCases,
       selectedTypes
@@ -358,14 +380,18 @@ export async function generateTestCasesWithAI(
             testCase.requirementRef,
             requirements,
           ),
+          automationPlan: {
+            mode: "manual" as const,
+            reason: "Template fallback cases require human review before execution.",
+          },
         })),
       ),
     );
-
     const requirementCoverage = buildRequirementCoverage(requirements, fallbackCases);
     const missingRequirementIds = requirementCoverage
       .filter((item) => item.status === "missing")
       .map((item) => item.requirementId);
+    const fallbackTargets = selectedTypes.map((type) => ({ type, count: 0 }));
 
     return {
       ...fallback,
@@ -377,7 +403,9 @@ export async function generateTestCasesWithAI(
       coverage: buildCoverage(
         selectedTypes,
         fallbackCases,
+        fallbackTargets,
         selectedTypes,
+        false,
         [],
         missingRequirementIds,
       ),

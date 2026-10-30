@@ -68,14 +68,28 @@ Test-runner screenshots and traces are saved in `evidence/playwright/`. The dash
 - Each request accepts 1–50 generated cases and is limited to 512 KB.
 - In production, `/api/execute` requires `QA_EXECUTION_TOKEN` to be configured with at least 32 characters and supplied as a bearer token. Browser execution returns an error when the token is missing or invalid.
 - Before a public deployment, add and review application-level authentication, authorization, rate limits, and resource limits. The protections here do not replace deployment security review.
+- Test case generation uses the configured local Ollama model. The model plans
+  scenarios from independently testable requirement behaviors, so the number
+  of cases can vary even when two tickets contain the same number of criteria.
+- Each planned scenario is linked to one generated case. Missing cases are
+  reported as partial coverage. If Ollama fails, the app labels its
+  criterion-specific template cases as a manual fallback, not as AI-generated
+  scenarios.
+- Ollama responses use a structured JSON schema and a response token budget
+  derived from the prompt size and context window. The default output ceiling is
+  8,192 tokens and can be changed with `OLLAMA_NUM_PREDICT`.
+- Generated cases with supported browser plans execute as Playwright actions with assertions. Cases without a supported plan are marked manual.
+- Navigation status, generated case results, browser errors, failed requests, and screenshots are reported separately where available.
+- Screenshot capture is best-effort and may be unavailable for some websites.
 
 Do not use real passwords, personal data, job applications, or other externally visible actions in test runs. Keep destructive scenarios manual and use an authorized test environment.
 
-## Known limitations
+## Known limitations and planned work
 
 - Test-case count and scenario selection depend on the AI response. Check the requirement-to-test links and any missing-coverage warning; the platform does not claim that a category count alone proves coverage.
-- Browser automation is limited to the actions listed above. Login state, file uploads, multi-window workflows, and application-specific setup are not implemented yet.
 - The fallback creates one manual case per extracted criterion; split criteria containing multiple independent behaviors and review each case before execution.
+- Automation currently supports same-origin navigation, filling labelled fields, clicking named buttons or links, and a limited set of assertions. Login setup, file uploads, multi-window workflows, and application-specific setup are not implemented yet.
+- Jira API integration, downloadable HTML/JSON reports, and CI execution are planned improvements.
 - The installed Next.js CLI currently emits a security advisory. Its applicability to this project has not been independently verified and is tracked separately from these QA behavior changes.
 
 ## Author
