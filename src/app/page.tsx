@@ -17,61 +17,46 @@ import type {
 
 
 type ExecutionResult = {
-
   id: string;
-
   title: string;
-
-  status: "PASSED" | "FAILED";
-
-  httpStatus: number | null;
-
-  pageTitle: string;
-
-  finalUrl: string;
-
-  pageInfo: {
-
-    headingCount: number;
-
-    linkCount: number;
-
-    buttonCount: number;
-
-    inputCount: number;
-
+  status: "PASSED" | "FAILED" | "MANUAL" | "BLOCKED";
+  reason: string | null;
+  assertions: Array<{ action: string; status: "PASSED" | "FAILED"; detail: string }>;
+  navigation: {
+    status: "PASSED" | "FAILED" | "SKIPPED";
+    httpStatus: number | null;
+    finalUrl: string;
+    error: string | null;
   };
-
-  consoleErrors: string[];
-
-  pageErrors: string[];
-
+  diagnostics: {
+    consoleErrors: string[];
+    pageErrors: string[];
+    failedRequests: string[];
+    httpFailures: string[];
+  };
   screenshot: string | null;
-
 };
-
-
 
 type ExecutionResponse = {
-
-  summary: {
-
-    total: number;
-
-    passed: number;
-
-    failed: number;
-
+  summary: { total: number; passed: number; failed: number; manual: number; blocked: number };
+  navigation: {
+    status: "PASSED" | "FAILED";
+    httpStatus: number | null;
+    pageTitle: string;
+    finalUrl: string;
+    pageInfo: { headingCount: number; linkCount: number; buttonCount: number; inputCount: number } | null;
+    error: string | null;
+    screenshot: string | null;
   };
-
+  diagnostics: {
+    consoleErrors: string[];
+    pageErrors: string[];
+    failedRequests: string[];
+    httpFailures: string[];
+  };
   results: ExecutionResult[];
-
   error?: string;
-
 };
-
-
-
 export default function Home() {
 
   const [jiraTicket, setJiraTicket] = useState("");
@@ -79,6 +64,10 @@ export default function Home() {
   const [generatedTests, setGeneratedTests] = useState<TestCase[]>([]);
 
   const [appUrl, setAppUrl] = useState("");
+
+  const [executionToken, setExecutionToken] = useState("");
+
+  const [allowInteractions, setAllowInteractions] = useState(false);
 
   const [environment, setEnvironment] = useState("QA");
 
@@ -257,125 +246,67 @@ export default function Home() {
 
 
   const handleRunBrowserTest = async () => {
-
-    if (!appUrl.trim()) {
-
-      setMessage("Please enter your application URL.");
-
+    if (generatedTests.length === 0) {
+      setMessage("Generate test cases before starting browser execution.");
       return;
-
     }
-
-
+    if (!appUrl.trim()) {
+      setMessage("Please enter your application URL.");
+      return;
+    }
 
     let parsedUrl: URL;
-
-
-
     try {
-
       parsedUrl = new URL(appUrl);
-
     } catch {
-
       setMessage("Please enter a valid application URL.");
-
       return;
-
     }
-
-
-
     if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-
       setMessage("Only HTTP and HTTPS URLs are supported.");
-
       return;
-
     }
-
-
 
     setIsRunning(true);
-
     setExecution(null);
-
-    setMessage("Launching Playwright and checking the application...");
-
-
+    setMessage("Running generated test cases with Playwright...");
 
     try {
-
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (executionToken.trim()) {
+        headers.Authorization = `Bearer ${executionToken.trim()}`;
+      }
       const response = await fetch("/api/execute", {
-
         method: "POST",
-
-        headers: {
-
-          "Content-Type": "application/json",
-
-        },
-
+        headers,
         body: JSON.stringify({
           url: parsedUrl.toString(),
-          environment,
           testCases: generatedTests,
+          allowInteractions,
         }),
-
       });
 
-
-
       const data = (await response.json()) as ExecutionResponse;
-
-
-
       if (!response.ok) {
-
-        throw new Error(
-
-          data.error || `Request failed: ${response.status}`
-
-        );
-
+        throw new Error(data.error || `Request failed: ${response.status}`);
       }
 
-
-
       setExecution(data);
-
-
-
       setMessage(
-
-        `Browser check completed for ${environment}. ` +
-
-        `${data.summary.passed} passed, ${data.summary.failed} failed.`
-
+        `Execution report for ${environment}: ${data.summary.passed} passed, ` +
+        `${data.summary.failed} failed, ${data.summary.manual} manual, ` +
+        `${data.summary.blocked} blocked.`,
       );
-
     } catch (error) {
-
       setMessage(
-
         error instanceof Error
-
           ? `Execution failed: ${error.message}`
-
-          : "An unexpected error occurred during execution."
-
+          : "An unexpected error occurred during execution.",
       );
-
     } finally {
-
       setIsRunning(false);
-
     }
-
   };
-
-
-
   const handleExportReport = () => {
     if (!execution) return;
 
@@ -385,6 +316,8 @@ export default function Home() {
       environment,
       applicationUrl: appUrl,
       summary: execution.summary,
+      navigation: execution.navigation,
+      diagnostics: execution.diagnostics,
       results: execution.results,
     };
 
@@ -656,6 +589,44 @@ export default function Home() {
               />
 
             </div>
+            <p className="text-xs leading-5 text-slate-400">
+              Only public websites on standard HTTP or HTTPS ports are accepted. Local and private-network targets are blocked.
+            </p>
+
+            <div>
+              <label htmlFor="execution-token" className="mb-2 block text-sm font-medium">
+                Execution access token <span className="text-slate-500">(private deployments)</span>
+              </label>
+              <input
+                id="execution-token"
+                type="password"
+                autoComplete="off"
+                value={executionToken}
+                onChange={(event) => setExecutionToken(event.target.value)}
+                placeholder="Leave blank for local development"
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 p-3 text-sm outline-none focus:border-blue-500"
+              />
+              <p className="mt-2 text-xs text-slate-400">
+                A deployed server requires a configured token; the value is sent only with the execution request.
+              </p>
+            </div>
+
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-amber-800 bg-amber-950/20 p-3">
+              <input
+                type="checkbox"
+                checked={allowInteractions}
+                onChange={(event) => setAllowInteractions(event.target.checked)}
+                className="mt-1 accent-amber-500"
+              />
+              <span>
+                <span className="block text-sm font-medium text-amber-200">
+                  Allow generated cases to fill fields and click controls
+                </span>
+                <span className="mt-1 block text-xs text-amber-100/80">
+                  Use only on an authorized QA/UAT target with synthetic data. Enabling interactions can submit forms and change page state.
+                </span>
+              </span>
+            </label>
 
 
 
@@ -855,6 +826,14 @@ export default function Home() {
 
                 </p>
 
+                {generation.coverage && (
+                  <p className="text-xs text-slate-400" aria-label="Generated case counts">
+                    Cases by category: {generation.coverage.caseCounts
+                      .map(({ type, count }) => `${type}: ${count}`)
+                      .join(" · ")}
+                  </p>
+                )}
+
 
 
                 {partialCoverage && (
@@ -863,18 +842,22 @@ export default function Home() {
                     aria-label="Generation coverage warning"
                     className="rounded-lg border border-amber-700 bg-amber-950/40 p-3 text-sm text-amber-200"
                   >
-                    <strong>Partial generation:</strong>{" "}
-                    {partialCoverage.caseCounts
-                      .filter(
-                        ({ type }) =>
-                          partialCoverage.failedTypes.includes(type) ||
-                          partialCoverage.underfilledTypes.includes(type)
-                      )
-                      .map(
-                        ({ type, count }) => {
+                    <strong>Coverage needs review:</strong>{" "}
+                    {[
+                      ...partialCoverage.caseCounts
+                        .filter(
+                          ({ type, count }) =>
+                            partialCoverage.failedTypes.includes(type) ||
+                            (partialCoverage.underfilledTypes.includes(type) &&
+                              count <
+                                (partialCoverage.targetCaseCounts.find(
+                                  (item) => item.type === type,
+                                )?.count ?? 0)),
+                        )
+                        .map(({ type, count }) => {
                           const target =
                             partialCoverage.targetCaseCounts.find(
-                              (item) => item.type === type
+                              (item) => item.type === type,
                             )?.count ?? 0;
                           if (partialCoverage.failedTypes.includes(type)) {
                             if (generation.generationMethod === "template-fallback") {
@@ -884,19 +867,19 @@ export default function Home() {
                             return `${type}: AI generation failed; no cases were generated for this category`;
                           }
                           return `${type}: ${count} of ${target} planned cases (below target)`;
-                        }
-                      )
-                      .concat(
-                        partialCoverage.notApplicableTypes.map(
-                          (type) => `${type}: AI found no applicable scenarios`
-                        )
-                      )
-                      .concat(
-                        partialCoverage.targetWasCapped
-                          ? ["planned case count was capped at 50; review criterion coverage"]
-                          : []
-                      )
-                      .join("; ")}
+                        }),
+                      ...partialCoverage.notApplicableTypes.map(
+                        (type) => `${type}: AI found no applicable scenarios`,
+                      ),
+                      ...(partialCoverage.targetWasCapped
+                        ? ["planned case count was capped at 50; review criterion coverage"]
+                        : []),
+                      ...(partialCoverage.missingRequirementIds.length > 0
+                        ? [
+                            `No generated case is linked to: ${partialCoverage.missingRequirementIds.join(", ")}`,
+                          ]
+                        : []),
+                    ].join("; ")}
                   </p>
                 )}
 
@@ -932,6 +915,27 @@ export default function Home() {
 
 
 
+            {generation?.requirementCoverage && generation.requirementCoverage.length > 0 && (
+              <section className="space-y-3 border-t border-slate-800 pt-5" aria-label="Requirement traceability">
+                <h3 className="text-lg font-bold">Requirement-to-test links</h3>
+                <p className="text-xs leading-5 text-slate-400">
+                  These links come from generated requirement references. Review each case to confirm it truly verifies the criterion; a link alone is not proof of full coverage.
+                </p>
+                <div className="space-y-2">
+                  {generation.requirementCoverage.map((item) => (
+                    <article key={item.requirementId} className="rounded-lg border border-slate-800 bg-slate-950 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <strong className="text-sm text-blue-300">{item.requirementId}</strong>
+                        <span className={item.status === "linked" ? "text-xs text-emerald-300" : "text-xs text-amber-300"}>
+                          {item.status === "linked" ? `Linked: ${item.testCaseIds.join(", ")}` : "No generated case is linked"}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm text-slate-300">{item.criterion}</p>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
             {generatedTests.length > 0 && (
 
               <div className="space-y-4 border-t border-slate-800 pt-5">
@@ -1001,6 +1005,16 @@ export default function Home() {
                       {test.requirementRef}
 
                     </p>
+                    <p className="mt-3 text-sm text-slate-400">Execution readiness</p>
+                    {test.automationPlan?.mode === "automated" ? (
+                      <p className="mt-1 text-sm text-emerald-300">
+                        Automated plan · {test.automationPlan.actions.length} browser actions
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-sm text-amber-300">
+                        Manual · {test.automationPlan?.mode === "manual" ? test.automationPlan.reason : "No supported action plan was provided."}
+                      </p>
+                    )}
 
 
 
@@ -1087,15 +1101,10 @@ export default function Home() {
 
 
       {execution && (
-
-        <section className="mx-auto max-w-6xl px-6 pb-12">
-
+        <section className="mx-auto max-w-6xl px-6 pb-12" aria-label="Browser execution report">
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-
             <div className="flex flex-wrap items-center justify-between gap-4">
-              <h2 className="text-2xl font-bold">
-                Browser Execution Results
-              </h2>
+              <h2 className="text-2xl font-bold">Test Case Execution Report</h2>
               <button
                 type="button"
                 onClick={handleExportReport}
@@ -1105,266 +1114,128 @@ export default function Home() {
               </button>
             </div>
 
-
-
-            <div className="mt-5 grid gap-4 sm:grid-cols-3">
-
-              <div className="rounded-lg border border-slate-700 bg-slate-950 p-4">
-
-                <p className="text-sm text-slate-400">Total checks</p>
-
-                <p className="mt-2 text-3xl font-bold">
-
-                  {execution.summary.total}
-
-                </p>
-
-              </div>
-
-
-
-              <div className="rounded-lg border border-emerald-800 bg-slate-950 p-4">
-
-                <p className="text-sm text-slate-400">Passed</p>
-
-                <p className="mt-2 text-3xl font-bold text-emerald-400">
-
-                  {execution.summary.passed}
-
-                </p>
-
-              </div>
-
-
-
-              <div className="rounded-lg border border-red-800 bg-slate-950 p-4">
-
-                <p className="text-sm text-slate-400">Failed</p>
-
-                <p className="mt-2 text-3xl font-bold text-red-400">
-
-                  {execution.summary.failed}
-
-                </p>
-
-              </div>
-
+            <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              {[
+                ["Generated cases", execution.summary.total, "border-slate-700 text-white"],
+                ["Passed", execution.summary.passed, "border-emerald-800 text-emerald-300"],
+                ["Failed", execution.summary.failed, "border-red-800 text-red-300"],
+                ["Manual", execution.summary.manual, "border-amber-800 text-amber-300"],
+                ["Blocked", execution.summary.blocked, "border-slate-600 text-slate-300"],
+              ].map(([label, value, color]) => (
+                <div key={label} className={`rounded-lg border bg-slate-950 p-4 ${color}`}>
+                  <p className="text-sm text-slate-400">{label}</p>
+                  <p className="mt-2 text-3xl font-bold">{value}</p>
+                </div>
+              ))}
             </div>
 
-
-
-            {execution.results.map((result) => (
-
-              <article
-
-                key={result.id}
-
-                className="mt-6 rounded-xl border border-slate-700 bg-slate-950 p-5"
-
-              >
-
-                <div className="flex flex-wrap items-center justify-between gap-3">
-
-                  <div>
-
-                    <p className="text-sm text-slate-400">{result.id}</p>
-
-                    <h3 className="mt-1 text-lg font-semibold">
-
-                      {result.title}
-
-                    </h3>
-
-                  </div>
-
-
-
-                  <span
-
-                    className={`rounded-full border px-3 py-1 text-sm ${result.status === "PASSED"
-
-                        ? "border-emerald-700 text-emerald-400"
-
-                        : "border-red-700 text-red-400"
-
-                      }`}
-
-                  >
-
-                    {result.status}
-
-                  </span>
-
-                </div>
-
-
-
-                <div className="mt-5 grid gap-3 sm:grid-cols-2">
-
-                  <p className="text-sm text-slate-400">
-
-                    HTTP status:{" "}
-
-                    <span className="text-white">
-
-                      {result.httpStatus ?? "No response"}
-
-                    </span>
-
-                  </p>
-
-
-
-                  <p className="text-sm text-slate-400">
-
-                    Page title:{" "}
-
-                    <span className="text-white">
-
-                      {result.pageTitle || "No title"}
-
-                    </span>
-
-                  </p>
-
-
-
-                  <p className="break-all text-sm text-slate-400 sm:col-span-2">
-
-                    Final URL:{" "}
-
-                    <span className="text-white">{result.finalUrl}</span>
-
-                  </p>
-
-                </div>
-
-
-
-                <h4 className="mt-5 font-semibold">Page elements</h4>
-
-
-
-                <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-
-                  {[
-
-                    ["Headings", result.pageInfo.headingCount],
-
-                    ["Links", result.pageInfo.linkCount],
-
-                    ["Buttons", result.pageInfo.buttonCount],
-
-                    ["Inputs", result.pageInfo.inputCount],
-
-                  ].map(([label, value]) => (
-
-                    <div
-
-                      key={label}
-
-                      className="rounded-lg border border-slate-800 p-3"
-
-                    >
-
+            <section className="mt-6 rounded-xl border border-slate-700 bg-slate-950 p-5" aria-label="Navigation check">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h3 className="text-lg font-semibold">Separate page navigation check</h3>
+                <span className={execution.navigation.status === "PASSED" ? "rounded-full border border-emerald-700 px-3 py-1 text-sm text-emerald-300" : "rounded-full border border-red-700 px-3 py-1 text-sm text-red-300"}>
+                  {execution.navigation.status}
+                </span>
+              </div>
+              <p className="mt-3 text-sm text-slate-300">
+                Navigation and browser diagnostics are reported separately; neither is counted as a generated test case.
+              </p>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <p className="text-sm text-slate-400">HTTP status: <span className="text-white">{execution.navigation.httpStatus ?? "No response"}</span></p>
+                <p className="text-sm text-slate-400">Page title: <span className="text-white">{execution.navigation.pageTitle || "No title"}</span></p>
+                <p className="break-all text-sm text-slate-400 sm:col-span-2">Final URL: <span className="text-white">{execution.navigation.finalUrl || "Not available"}</span></p>
+              </div>
+              {execution.navigation.error && <p className="mt-3 break-words text-sm text-red-300">{execution.navigation.error}</p>}
+              {execution.navigation.pageInfo && (
+                <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  {[["Headings", execution.navigation.pageInfo.headingCount], ["Links", execution.navigation.pageInfo.linkCount], ["Buttons", execution.navigation.pageInfo.buttonCount], ["Inputs", execution.navigation.pageInfo.inputCount]].map(([label, value]) => (
+                    <div key={label} className="rounded-lg border border-slate-800 p-3">
                       <p className="text-xs text-slate-400">{label}</p>
-
                       <p className="mt-1 text-xl font-bold">{value}</p>
-
                     </div>
-
                   ))}
-
                 </div>
+              )}
+              {execution.navigation.screenshot && (
+                <div className="mt-5">
+                  <h4 className="mb-2 text-sm font-semibold">Navigation screenshot (not a test-case result)</h4>
+                  <img src={execution.navigation.screenshot} alt="Screenshot from the separate navigation check" className="w-full rounded-lg border border-slate-700" />
+                </div>
+              )}
+            </section>
 
-
-
-                <h4 className="mt-5 font-semibold">Browser errors</h4>
-
-
-
-                {result.consoleErrors.length === 0 &&
-
-                  result.pageErrors.length === 0 ? (
-
-                  <p className="mt-2 text-sm text-emerald-400">
-
-                    No console or page errors captured.
-
-                  </p>
-
-                ) : (
-
-                  <div className="mt-2 space-y-2">
-
-                    {[...result.consoleErrors, ...result.pageErrors].map(
-
-                      (error, index) => (
-
-                        <p
-
-                          key={index}
-
-                          className="break-words rounded-lg bg-red-950/40 p-3 text-sm text-red-300"
-
-                        >
-
-                          {error}
-
-                        </p>
-
-                      )
-
+            <section className="mt-6 rounded-xl border border-slate-700 bg-slate-950 p-5" aria-label="Browser diagnostics">
+              <h3 className="text-lg font-semibold">Browser diagnostics</h3>
+              <p className="mt-2 text-xs text-slate-400">Diagnostics are evidence and do not automatically determine functional case outcomes.</p>
+              <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                {([
+                  ["Console errors", execution.diagnostics.consoleErrors],
+                  ["JavaScript page errors", execution.diagnostics.pageErrors],
+                  ["Failed network requests", execution.diagnostics.failedRequests],
+                  ["HTTP error responses", execution.diagnostics.httpFailures],
+                ] as Array<[string, string[]]>).map(([label, items]) => (
+                  <div key={label} className="rounded-lg border border-slate-800 p-3">
+                    <h4 className="text-sm font-semibold">{label} ({items.length})</h4>
+                    {items.length === 0 ? (
+                      <p className="mt-2 text-sm text-emerald-300">None captured.</p>
+                    ) : (
+                      <ul className="mt-2 space-y-2">
+                        {items.map((item, index) => <li key={index} className="break-words rounded bg-red-950/40 p-2 text-xs text-red-200">{item}</li>)}
+                      </ul>
                     )}
-
                   </div>
+                ))}
+              </div>
+            </section>
 
-                )}
+            {execution.results.map((result) => {
+              const generatedCase = generatedTests.find((testCase) => testCase.id === result.id);
+              const statusColor = result.status === "PASSED"
+                ? "border-emerald-700 text-emerald-300"
+                : result.status === "FAILED"
+                  ? "border-red-700 text-red-300"
+                  : result.status === "MANUAL"
+                    ? "border-amber-700 text-amber-300"
+                    : "border-slate-600 text-slate-300";
 
-
-
-                {result.screenshot ? (
-
-                  <div className="mt-6">
-
-                    <h4 className="mb-3 font-semibold">
-
-                      Page screenshot
-
-                    </h4>
-
-                    <img
-
-                      src={result.screenshot}
-
-                      alt="Screenshot captured by Playwright"
-
-                      className="w-full rounded-lg border border-slate-700"
-
-                    />
-
+              return (
+                <article key={result.id} className="mt-6 rounded-xl border border-slate-700 bg-slate-950 p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm text-slate-400">{result.id}</p>
+                      <h3 className="mt-1 text-lg font-semibold">{result.title}</h3>
+                    </div>
+                    <span className={`rounded-full border px-3 py-1 text-sm ${statusColor}`}>{result.status}</span>
                   </div>
-
-                ) : (
-
-                  <p className="mt-4 text-sm text-amber-300">
-
-                    Screenshot unavailable for this run.
-
+                  {result.reason && <p className="mt-3 text-sm text-slate-300">{result.reason}</p>}
+                  {generatedCase && <p className="mt-3 text-sm text-slate-400">Requirement: <span className="text-slate-200">{generatedCase.requirementRef}</span></p>}
+                  <p className="mt-3 text-sm text-slate-400">
+                    This case navigation: {result.navigation.status}
+                    {result.navigation.httpStatus !== null ? ` · HTTP ${result.navigation.httpStatus}` : ""}
                   </p>
-
-                )}
-
-              </article>
-
-            ))}
-
+                  {result.assertions.length > 0 && (
+                    <div className="mt-4">
+                      <h4 className="font-semibold">Functional assertions</h4>
+                      <ul className="mt-2 space-y-2">
+                        {result.assertions.map((assertion, index) => (
+                          <li key={`${assertion.action}-${index}`} className={`rounded-lg border p-3 text-sm ${assertion.status === "PASSED" ? "border-emerald-900 text-emerald-200" : "border-red-900 text-red-200"}`}>
+                            <strong>{assertion.status}</strong> · {assertion.detail}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {result.screenshot && (
+                    <div className="mt-5">
+                      <h4 className="mb-2 text-sm font-semibold">Screenshot from generated test execution</h4>
+                      <img src={result.screenshot} alt={`Screenshot from ${result.id}`} className="w-full rounded-lg border border-slate-700" />
+                    </div>
+                  )}
+                </article>
+              );
+            })}
           </div>
-
         </section>
-
       )}
-
     </main>
 
   );

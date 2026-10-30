@@ -1,115 +1,96 @@
-# AI QA Platform 🚀
+# AI QA Platform
 
-An AI-assisted QA automation platform built with **Next.js, TypeScript, and Playwright** to streamline test case generation and browser-based application validation.
+An AI-assisted QA platform built with **Next.js, TypeScript, and Playwright**. It turns requirements into reviewable test cases, executes supported browser plans, and reports requirement links and browser evidence.
 
-## Overview
+## What it does
 
-The AI QA Platform provides a foundation for generating test scenarios from Jira requirements and executing browser checks against QA and UAT environments.
+- Generates a requirement-driven number of positive, negative, and edge-case scenarios through a locally configured Ollama model. There is no fixed case quota per category; the response is capped at 50 cases per request.
+- Validates AI responses, retries malformed output, and creates one clearly labelled manual fallback case per extracted acceptance criterion if the provider fails.
+- Shows generated counts by category and links each case to a requirement reference. Missing links and categories with no applicable scenarios are reported as coverage gaps.
+- Runs supported structured browser plans. Cases without a supported plan are labelled **Manual** instead of being reported as executed.
+- Separates the initial page navigation result from each test case's assertion results.
+- Captures console errors, page errors, failed requests, HTTP error responses, page details, and screenshots where available.
+- Blocks private and reserved IP destinations, validates DNS results, and routes browser traffic through a proxy that checks every request, including redirects.
 
-The project combines a web-based dashboard with a Playwright-powered API to collect execution results and browser diagnostics.
+Requirement links are review aids. A link does not prove that a test case semantically covers the criterion; review the case and expected result.
 
-## Features
+## Supported browser actions
 
-- **Test Case Generation:** Generate predefined test scenarios based on a Jira ticket description.
-- **Test Coverage Selection:** Select positive, negative, and edge-case categories.
-- **Environment Selection:** Configure QA or UAT as the target environment.
-- **Browser Automation:** Launch a headless Chromium browser using Playwright.
-- **Application Validation:** Check page navigation, HTTP response status, and page title.
-- **Page Inspection:** Collect heading, link, button, and input counts.
-- **Browser Diagnostics:** Capture browser console errors and page errors.
-- **Screenshot Evidence:** Attempt to capture screenshots and return them with execution results when available.
-- **Execution Summary:** Display passed and failed counts in the dashboard.
+Generated plans can navigate to a same-origin path, fill an accessible field, click a named button or link, and assert visible text, a role, or a URL. Unsupported plans remain manual.
 
-## Tech Stack
+Field filling and clicks are disabled by default. Enabling them can submit forms or change the target page. Use interactions only on an authorized QA/UAT target with synthetic data.
+
+## Tech stack
 
 | Technology | Purpose |
 |---|---|
-| Next.js | Web application and API routes |
-| React | Interactive user interface |
-| TypeScript | Type-safe development |
-| Playwright | Browser automation |
+| Next.js and React | Dashboard and API routes |
+| TypeScript and Zod | Application code and response validation |
+| Ollama | Local AI test-case generation (default model: `qwen2.5:7b`) |
+| Playwright | Chromium browser execution and test-runner evidence |
 | Tailwind CSS | Dashboard styling |
-| Node.js | Runtime environment |
 
-## Getting Started
+## Getting started
 
 ### Prerequisites
 
 - Node.js and npm
 - Git
+- Ollama with the configured model available
+- Playwright Chromium, or Google Chrome if using the `PLAYWRIGHT_CHANNEL=chrome` option
 
-### 1. Clone the repository
+### Install and run
 
 ```bash
 git clone https://github.com/Chaitanyamark/ai-qa-platform.git
 cd ai-qa-platform
-```
-
-### 2. Install dependencies
-
-```bash
 npm install
-```
-
-### 3. Install the Playwright Chromium browser
-
-```bash
 npx playwright install chromium
-```
-
-### 4. Start the development server
-
-```bash
 npm run dev
 ```
 
-### 5. Open the application
+Open [http://localhost:3000](http://localhost:3000). By default, the app uses Ollama at `http://127.0.0.1:11434` with model `qwen2.5:7b`. Configure `OLLAMA_URL`, `OLLAMA_MODEL`, and `OLLAMA_TIMEOUT_MS` in `.env.local` to change those settings.
 
-Navigate to [http://localhost:3000](http://localhost:3000).
+### Run the platform tests
 
-## How to Use
+```bash
+npm test
+```
 
-1. Enter a Jira ticket description and acceptance criteria.
-2. Provide the URL of an application you are authorized to test.
-3. Select the target environment.
-4. Choose the desired test coverage categories.
-5. Generate test scenarios.
-6. Click **Run Browser Test** to execute the current Playwright page-load check.
-7. Review the HTTP status, page details, browser errors, and screenshot when available.
+The Playwright suite starts a local mock Ollama service and a local Next.js server. It uses test fixtures and does not visit a public website. Set `PLAYWRIGHT_CHANNEL=chrome` to use installed Google Chrome instead of the Playwright Chromium browser.
 
-## Current Implementation
+Test-runner screenshots and traces are saved in `evidence/playwright/`. The dashboard also displays screenshots returned by a browser execution run.
 
-The current version is an MVP.
+## Execution scope and security
 
+- The browser runner accepts public HTTP and HTTPS URLs on ports 80 and 443. It rejects localhost, private/reserved IP addresses, and hostnames that resolve to any non-public address.
+- Redirect requests pass through the same egress proxy and are revalidated. Browser traffic is limited to HTTP and HTTPS.
+- Each request accepts 1–50 generated cases and is limited to 512 KB.
+- In production, `/api/execute` requires `QA_EXECUTION_TOKEN` to be configured with at least 32 characters and supplied as a bearer token. Browser execution returns an error when the token is missing or invalid.
+- Before a public deployment, add and review application-level authentication, authorization, rate limits, and resource limits. The protections here do not replace deployment security review.
 - Test case generation uses the configured local Ollama model. The model plans
   scenarios from independently testable requirement behaviors, so the number
   of cases can vary even when two tickets contain the same number of criteria.
 - Each planned scenario is linked to one generated case. Missing cases are
-  reported as partial coverage. If Ollama fails, the app labels its generic
-  template suggestions as a fallback; those suggestions are not a content-based
-  scenario plan.
+  reported as partial coverage. If Ollama fails, the app labels its
+  criterion-specific template cases as a manual fallback, not as AI-generated
+  scenarios.
 - Ollama responses use a structured JSON schema and a response token budget
   derived from the prompt size and context window. The default output ceiling is
   8,192 tokens and can be changed with `OLLAMA_NUM_PREDICT`.
-- Browser execution currently performs a page-load check rather than executing every generated scenario.
+- Generated cases with supported browser plans execute as Playwright actions with assertions. Cases without a supported plan are marked manual.
+- Navigation status, generated case results, browser errors, failed requests, and screenshots are reported separately where available.
 - Screenshot capture is best-effort and may be unavailable for some websites.
-- Jira integration and full scenario execution are planned enhancements.
 
-## Roadmap
+Do not use real passwords, personal data, job applications, or other externally visible actions in test runs. Keep destructive scenarios manual and use an authorized test environment.
 
-- [ ] Execute generated scenarios as real Playwright tests.
-- [ ] Add assertions for expected application behavior.
-- [ ] Integrate with the Jira API.
-- [ ] Add downloadable HTML and JSON reports.
-- [ ] Improve failure diagnostics and screenshot evidence.
-- [ ] Add automated tests for the platform itself.
-- [ ] Add CI/CD execution with GitHub Actions.
+## Known limitations and planned work
 
-## Security Notes
-
-- Use only application URLs you are authorized to test.
-- Do not commit API keys, credentials, or environment secrets.
-- The browser-execution endpoint is intended for local development and is not yet hardened for public deployment.
+- Test-case count and scenario selection depend on the AI response. Check the requirement-to-test links and any missing-coverage warning; the platform does not claim that a category count alone proves coverage.
+- The fallback creates one manual case per extracted criterion; split criteria containing multiple independent behaviors and review each case before execution.
+- Automation currently supports same-origin navigation, filling labelled fields, clicking named buttons or links, and a limited set of assertions. Login setup, file uploads, multi-window workflows, and application-specific setup are not implemented yet.
+- Jira API integration, downloadable HTML/JSON reports, and CI execution are planned improvements.
+- The installed Next.js CLI currently emits a security advisory. Its applicability to this project has not been independently verified and is tracked separately from these QA behavior changes.
 
 ## Author
 
@@ -118,7 +99,3 @@ The current version is an MVP.
 QA Automation Engineer | Playwright | TypeScript | Selenium | API Testing
 
 GitHub: [Chaitanyamark](https://github.com/Chaitanyamark)
-
----
-
-*This project is under active development as a hands-on QA automation engineering project.*

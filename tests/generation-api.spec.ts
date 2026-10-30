@@ -11,6 +11,7 @@ type Coverage = {
   underfilledTypes: string[];
   targetWasCapped: boolean;
   notApplicableTypes: string[];
+  missingRequirementIds: string[];
   status: "complete" | "partial";
 };
 
@@ -42,6 +43,70 @@ async function getStats(request: APIRequestContext) {
 
 test.beforeEach(async ({ request }) => {
   await resetMock(request);
+});
+
+test("links cases to supplied criteria and reports criteria without a generated case", async ({
+  request,
+}) => {
+  const ticket = [
+    "Acceptance Criteria",
+    "1. The profile heading is displayed.",
+    "2. The settings link is displayed.",
+    "3. The profile page has a help link.",
+    "[[mock:short]]",
+  ].join("\n");
+  const { response, body } = await generate(request, ticket);
+
+  expect(response.status()).toBe(200);
+  expect(body.testCases).toHaveLength(1);
+  expect(body.requirementCoverage).toMatchObject([
+    {
+      requirementId: "AC-001",
+      testCaseIds: ["TC001"],
+      status: "linked",
+    },
+    { requirementId: "AC-002", testCaseIds: [], status: "missing" },
+    { requirementId: "AC-003", testCaseIds: [], status: "missing" },
+  ]);
+  expect(getCoverage(body).missingRequirementIds).toEqual([
+    "AC-002",
+    "AC-003",
+  ]);
+});
+
+test("labels fallback cases manual and keeps criterion links when Ollama fails", async ({
+  request,
+}) => {
+  const ticket = [
+    "Acceptance Criteria",
+    "1. Valid registration displays a success message.",
+    "2. Invalid email is rejected with a validation message.",
+    "[[mock:provider-error]]",
+  ].join("\n");
+  const { response, body } = await generate(request, ticket, [
+    "Positive",
+    "Negative",
+    "Edge Cases",
+  ]);
+
+  expect(response.status()).toBe(200);
+  expect(body.generationMethod).toBe("template-fallback");
+  const cases = body.testCases as Array<Record<string, unknown>>;
+  expect(cases).toHaveLength(2);
+  expect(cases.map((item) => item.requirementRef)).toEqual([
+    "AC-001",
+    "AC-002",
+  ]);
+  expect(
+    cases.every(
+      (item) =>
+        (item.automationPlan as { mode?: string }).mode === "manual",
+    ),
+  ).toBeTruthy();
+  expect(body.requirementCoverage).toMatchObject([
+    { requirementId: "AC-001", status: "linked" },
+    { requirementId: "AC-002", status: "linked" },
+  ]);
 });
 
 test("reports complete coverage when every model-planned scenario is generated", async ({ request }) => {
@@ -354,6 +419,37 @@ test("preserves all valid cases when the model returns many", async ({
   expect(getCoverage(body).caseCounts).toEqual([
     { type: "Positive", count: 12 },
   ]);
+});
+
+test("keeps a valid case and downgrades an unsupported browser plan to manual", async ({
+  request,
+}) => {
+  const { response, body } = await generate(
+    request,
+    "Requirement [[mock:invalid-automation]]",
+  );
+
+  expect(response.status()).toBe(200);
+  expect(body.generationMethod).toBe("ai");
+  expect(body.testCases).toHaveLength(1);
+  expect((body.testCases as Array<Record<string, unknown>>)[0].automationPlan)
+    .toMatchObject({
+      mode: "manual",
+      reason: expect.stringContaining("supported browser actions"),
+    });
+});
+
+test("uses the manual template fallback after an Ollama timeout without retrying", async ({
+  request,
+}) => {
+  const { response, body } = await generate(request, "Requirement [[mock:timeout]]");
+
+  expect(response.status()).toBe(200);
+  expect(body.generationMethod).toBe("template-fallback");
+  expect(getCoverage(body).failedTypes).toEqual(["Positive"]);
+
+  const stats = await getStats(request);
+  expect(stats.totalCalls).toBe(1);
 });
 
 for (const scenario of [

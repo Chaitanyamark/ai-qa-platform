@@ -1,6 +1,10 @@
 import { z } from "zod";
-import { TestCaseSchema } from "@/lib/test-generator-schema";
+import {
+  AutomationPlanSchema,
+  TestCaseSchema,
+} from "@/lib/test-generator-schema";
 import { deduplicateTestCases } from "@/lib/test-case-deduplication";
+import { extractRequirementItems } from "@/lib/requirement-traceability";
 
 const OLLAMA_URL = (
   process.env.OLLAMA_URL || "http://127.0.0.1:11434"
@@ -120,6 +124,16 @@ function normalizeTypes(raw: unknown, types: TestType[]): unknown {
         normalized.requirementRef = "Supplied requirement";
       }
 
+      const plan = AutomationPlanSchema.safeParse(testCase.automationPlan);
+      normalized.automationPlan = plan.success
+        ? plan.data
+        : {
+            mode: "manual",
+            reason: testCase.automationPlan
+              ? "The generated action plan did not match the supported browser actions."
+              : "The model did not provide a supported browser action plan.",
+          };
+
       return normalized;
     }),
   };
@@ -150,6 +164,11 @@ function parseModelJson(content: string): unknown {
 }
 
 function buildPrompt(requirement: string, type: TestType): string {
+  const requirementItems = extractRequirementItems(requirement);
+  const requirementList = requirementItems
+    .map((item) => `- ${item.requirementId}: ${item.criterion}`)
+    .join("\n");
+
   return `
 You are a senior QA engineer writing detailed, executable manual test cases.
 
@@ -192,7 +211,28 @@ QUALITY RULES
    should see or which state should change. Never "works as expected".
 6. One primary verification per test case.
 7. requirementRef: the real ID from the requirement if one exists (a Jira key
-   or acceptance-criterion number); otherwise use "Supplied requirement".
+   or acceptance-criterion number); otherwise use the supplied ID listed below.
+8. automationPlan: use a structured browser plan only when the page path,
+   controls and expected outcome are explicit enough to automate safely.
+   Otherwise use {"mode":"manual","reason":"..."}. Never guess selectors,
+   URLs, hidden behavior or success messages. Use synthetic test data only.
+
+SUPPORTED BROWSER ACTIONS
+- {"action":"navigate","path":"/same-origin-path"}
+- {"action":"fill","label":"Accessible field label","value":"synthetic value"}
+- {"action":"click","role":"button","name":"Visible control name"}
+- {"action":"assert-visible","role":"alert"}
+- {"action":"assert-text","text":"Text stated by the requirement"}
+- {"action":"assert-url","contains":"/expected-path"}
+Automated plans need at least one assertion. Mark contact or job applications,
+purchases, destructive actions, and other externally visible submissions as
+manual. Filling fields and clicking controls require explicit user opt-in.
+
+REQUIREMENT TRACEABILITY IDS
+Use one primary ID from this extracted list for each test case. Do not invent
+IDs. These links are review aids and do not by themselves prove semantic
+coverage:
+${requirementList}
 
 GROUNDING
 - Use field names, buttons, pages, endpoints, messages and limits exactly as
@@ -223,7 +263,11 @@ EXAMPLE OF THE REQUIRED LEVEL OF DETAIL
   ],
   "testData": "Display name: Asha Verma",
   "expectedResult": "The profile shows \\"Asha Verma\\" after the reload and the header displays the same name.",
-  "requirementRef": "Supplied requirement"
+  "requirementRef": "${requirementItems[0]?.requirementId ?? "REQ-001"}",
+  "automationPlan": {
+    "mode": "manual",
+    "reason": "Confirm the target page and save behavior before automating this workflow."
+  }
 }
 
 OUTPUT
@@ -262,7 +306,8 @@ the JSON. Use this structure:
 
 Every planned scenario needs a unique scenarioId, requirementRef and objective.
 Every test case needs the matching scenarioId, id, title, type, priority,
-preconditions, steps, expectedResult and requirementRef. testData is optional.
+preconditions, steps, expectedResult, requirementRef and automationPlan.
+testData is optional.
 The type of every test case must be exactly "${type}".
 There must be exactly one test case for each planned scenario and no unplanned
 test cases. Keep plannedScenarios and testCases empty when this category does

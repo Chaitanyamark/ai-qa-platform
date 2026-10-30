@@ -43,9 +43,12 @@ test("dashboard sends only the selected test category and renders the result", a
   const coverageWarning = page.getByRole("alert", {
     name: "Generation coverage warning",
   });
-  await expect(coverageWarning).toContainText("Partial generation");
+  await expect(coverageWarning).toContainText("Coverage needs review");
   await expect(coverageWarning).toContainText(
     "Positive: 1 of 4 planned cases (below target)"
+  );
+  await expect(coverageWarning).toContainText(
+    "No generated case is linked to: AC-002, AC-003, AC-004"
   );
 
   const statsResponse = await request.get(mockService + "/__stats");

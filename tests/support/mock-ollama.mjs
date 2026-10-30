@@ -176,6 +176,10 @@ const server = createServer(async (request, response) => {
     return sendJson(response, 503, { error: "Deterministic provider error." });
   }
 
+  if (requirement.includes("[[mock:timeout]]")) {
+    await new Promise((resolve) => setTimeout(resolve, 3500));
+  }
+
   let content;
   let doneReason = "stop";
   const plannedScenarios = planScenarios(type, requirement);
@@ -223,6 +227,13 @@ const server = createServer(async (request, response) => {
     let cases = scenarios.map((scenario, index) =>
       makeCase(type, scenario, index + 1)
     );
+
+    if (requirement.includes("[[mock:invalid-automation]]") && cases.length > 0) {
+      cases[0].automationPlan = {
+        mode: "automated",
+        actions: [{ action: "run-javascript", code: "unsafe" }],
+      };
+    }
 
     if (requirement.includes("[[mock:short]]")) {
       cases = cases.slice(0, 1);

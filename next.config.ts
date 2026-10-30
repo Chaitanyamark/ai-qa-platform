@@ -2,7 +2,10 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   /* config options here */
-  distDir: process.env.NEXT_DIST_DIR || ".next",
+  distDir:
+    process.env.QA_PLAYWRIGHT_BUILD_DIR ||
+    process.env.NEXT_DIST_DIR ||
+    ".next",
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {
