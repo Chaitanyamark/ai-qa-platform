@@ -1,13 +1,20 @@
-import { callLLM, MIN_CASES_PER_TYPE } from "@/lib/ai-provider";
+import { callLLM } from "@/lib/ai-provider";
 import { deduplicateTestCases as deduplicateCases } from "@/lib/test-case-deduplication";
 import { generateWithTemplates } from "@/lib/template-generator";
 import {
+  AutomationPlanSchema,
   GenerationResultSchema,
   type TestType as GeneratedTestType,
   type TestCase as GeneratedTestCase,
   type GenerationCoverage,
   type GenerationResult,
 } from "@/lib/test-generator-schema";
+import {
+  buildRequirementCoverage,
+  extractRequirementItems,
+  normalizeRequirementReference,
+  type RequirementItem,
+} from "@/lib/requirement-traceability";
 
 const DEFAULT_TEST_TYPES: GeneratedTestType[] = [
   "Positive",
@@ -63,6 +70,54 @@ function normalizeRawTypes(raw: unknown, selectedTypes: GeneratedTestType[]): un
         }
       }
       return item;
+    }),
+  };
+}
+
+function normalizeRawAutomationPlans(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const obj = raw as { testCases?: unknown };
+  if (!Array.isArray(obj.testCases)) return raw;
+
+  return {
+    ...obj,
+    testCases: obj.testCases.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      const testCase = item as Record<string, unknown>;
+      const plan = AutomationPlanSchema.safeParse(testCase.automationPlan);
+      return {
+        ...testCase,
+        automationPlan: plan.success
+          ? plan.data
+          : {
+              mode: "manual",
+              reason: testCase.automationPlan
+                ? "The generated action plan did not match the supported browser actions."
+                : "The model did not provide a supported browser action plan.",
+            },
+      };
+    }),
+  };
+}
+
+function normalizeRawRequirementRefs(
+  raw: unknown,
+  requirements: RequirementItem[],
+): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const obj = raw as { testCases?: unknown };
+  if (!Array.isArray(obj.testCases)) return raw;
+
+  return {
+    ...obj,
+    testCases: obj.testCases.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      const testCase = item as Record<string, unknown>;
+      const requirementRef =
+        typeof testCase.requirementRef === "string"
+          ? normalizeRequirementReference(testCase.requirementRef, requirements)
+          : "UNMAPPED";
+      return { ...testCase, requirementRef };
     }),
   };
 }
@@ -137,27 +192,30 @@ function buildCoverage(
   requestedTypes: GeneratedTestType[],
   testCases: GeneratedTestCase[],
   failedTypes: GeneratedTestType[] = [],
-  minimumCasesPerType = MIN_CASES_PER_TYPE
+  reportedEmptyTypes: GeneratedTestType[] = [],
+  missingRequirementIds: string[] = [],
 ): GenerationCoverage {
   const caseCounts = requestedTypes.map((type) => ({
     type,
     count: testCases.filter((testCase) => testCase.type === type).length,
   }));
-  const underfilledTypes = caseCounts
-    .filter(
-      ({ type, count }) =>
-        count < minimumCasesPerType && !failedTypes.includes(type)
-    )
-    .map(({ type }) => type);
+  const emptyTypes = requestedTypes.filter(
+    (type) =>
+      !failedTypes.includes(type) &&
+      (reportedEmptyTypes.includes(type) ||
+        !testCases.some((testCase) => testCase.type === type)),
+  );
 
   return {
     requestedTypes,
-    minimumCasesPerType,
     caseCounts,
     failedTypes,
-    underfilledTypes,
+    emptyTypes,
+    missingRequirementIds,
     status:
-      failedTypes.length > 0 || underfilledTypes.length > 0
+      failedTypes.length > 0 ||
+      emptyTypes.length > 0 ||
+      missingRequirementIds.length > 0
         ? "partial"
         : "complete",
   };
@@ -218,15 +276,18 @@ export async function generateTestCasesWithAI(
   }
 
   let fallbackReason = "";
+  const requirements = extractRequirementItems(requirement);
 
   try {
     // Stage 1: call the configured local AI model.
     const raw = await callLLM(requirement, selectedTypes);
 
     // Stage 2: normalize type labels, then validate the shape.
-    const validated = GenerationResultSchema.parse(
-      normalizeRawTypes(raw, selectedTypes)
+    const normalized = normalizeRawRequirementRefs(
+      normalizeRawAutomationPlans(normalizeRawTypes(raw, selectedTypes)),
+      requirements,
     );
+    const validated = GenerationResultSchema.parse(normalized);
     console.log("[testgen] raw cases:", validated.testCases.length);
 
     // Stage 3: keep only selected categories.
@@ -244,7 +305,7 @@ export async function generateTestCasesWithAI(
     const detailedCases = uniqueCases.filter(isMeaningfulTestCase);
     console.log("[testgen] after meaningful filter:", detailedCases.length);
 
-    if (detailedCases.length === 0) {
+    if (detailedCases.length === 0 && validated.testCases.length > 0) {
       throw new Error(
         `The AI returned no sufficiently detailed test cases ` +
           `(raw: ${validated.testCases.length}, ` +
@@ -256,16 +317,22 @@ export async function generateTestCasesWithAI(
     }
 
     const testCases = assignTestCaseIds(detailedCases);
+    const requirementCoverage = buildRequirementCoverage(requirements, testCases);
+    const missingRequirementIds = requirementCoverage
+      .filter((item) => item.status === "missing")
+      .map((item) => item.requirementId);
 
     return {
       ...validated,
       testCases,
+      requirementCoverage,
       generationMethod: "ai",
       coverage: buildCoverage(
         selectedTypes,
         testCases,
         raw.failedTypes,
-        raw.minimumCasesPerType
+        raw.emptyTypes,
+        missingRequirementIds,
       ),
     };
   } catch (error) {
@@ -284,16 +351,36 @@ export async function generateTestCasesWithAI(
     );
 
     const fallbackCases = assignTestCaseIds(
-      deduplicateTestCases(selectedFallbackCases)
+      deduplicateTestCases(
+        selectedFallbackCases.map((testCase) => ({
+          ...testCase,
+          requirementRef: normalizeRequirementReference(
+            testCase.requirementRef,
+            requirements,
+          ),
+        })),
+      ),
     );
+
+    const requirementCoverage = buildRequirementCoverage(requirements, fallbackCases);
+    const missingRequirementIds = requirementCoverage
+      .filter((item) => item.status === "missing")
+      .map((item) => item.requirementId);
 
     return {
       ...fallback,
       testCases: fallbackCases,
+      requirementCoverage,
       generationMethod: "template-fallback",
       // Add `fallbackReason: z.string().optional()` to GenerationResultSchema.
       fallbackReason,
-      coverage: buildCoverage(selectedTypes, fallbackCases, selectedTypes),
+      coverage: buildCoverage(
+        selectedTypes,
+        fallbackCases,
+        selectedTypes,
+        [],
+        missingRequirementIds,
+      ),
     };
   }
 }

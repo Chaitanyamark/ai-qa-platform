@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 
-const port = 11435;
-const state = { totalCalls: 0, callsByType: {} };
+const port = 12436;
+const state = { totalCalls: 0, callsByType: {}, lastPrompt: "" };
 
 function sendJson(response, status, body) {
   response.writeHead(status, { "content-type": "application/json" });
@@ -51,6 +51,7 @@ const server = createServer(async (request, response) => {
   if (request.method === "POST" && request.url === "/__reset") {
     state.totalCalls = 0;
     state.callsByType = {};
+    state.lastPrompt = "";
     return sendJson(response, 200, { reset: true });
   }
 
@@ -73,12 +74,20 @@ const server = createServer(async (request, response) => {
   const match = prompt.match(/distinct test cases of type "([^"]+)"/i);
   const type = match?.[1] || "Positive";
   const requirement = prompt.match(/<requirement>\s*([\s\S]*?)\s*<\/requirement>/i)?.[1] || "";
+  const requirementIds = [...prompt.matchAll(/^\s*-\s*((?:AC|REQ)-\d+):/gm)].map(
+    (entry) => entry[1],
+  );
 
   state.totalCalls += 1;
   state.callsByType[type] = (state.callsByType[type] || 0) + 1;
+  state.lastPrompt = prompt;
 
   if (requirement.includes("[[mock:provider-error]]")) {
     return sendJson(response, 503, { error: "Deterministic provider error." });
+  }
+
+  if (requirement.includes("[[mock:timeout]]")) {
+    await new Promise((resolve) => setTimeout(resolve, 3500));
   }
 
   let content;
@@ -88,6 +97,12 @@ const server = createServer(async (request, response) => {
     content = '{"testCases": [}';
   } else if (requirement.includes("[[mock:empty]]")) {
     content = "";
+  } else if (requirement.includes("[[mock:no-scenarios]]")) {
+    content = JSON.stringify({
+      summary: "No distinct scenario of this type is justified by the requirement.",
+      openQuestions: ["No behavior for this test category is specified."],
+      testCases: [],
+    });
   } else if (requirement.includes("[[mock:missing-field]]")) {
     const item = makeCase(type, 1);
     delete item.expectedResult;
@@ -105,9 +120,12 @@ const server = createServer(async (request, response) => {
   ) {
     content = '{"testCases": [}';
   } else {
-    let count = 5;
+    let count = Math.max(1, requirementIds.length);
     if (requirement.includes("[[mock:short]]")) count = 1;
     if (requirement.includes("[[mock:many]]")) count = 12;
+    if (requirement.includes("[[mock:complex]]")) {
+      count = Math.min(50, Math.max(1, requirementIds.length) + 4);
+    }
 
     let cases = Array.from({ length: count }, (_, index) =>
       makeCase(type, index + 1)
@@ -134,6 +152,27 @@ const server = createServer(async (request, response) => {
         email: "qa-user@example.test",
         password: "Synthetic-Pass-123",
       };
+    }
+
+    if (requirement.includes("[[mock:automatable]]")) {
+      cases[0].automationPlan = {
+        mode: "automated",
+        actions: [
+          { action: "assert-text", text: "Execution harness ready" },
+        ],
+      };
+    } else if (requirement.includes("[[mock:invalid-automation]]")) {
+      cases[0].automationPlan = {
+        mode: "automated",
+        actions: [{ action: "run-javascript", code: "unsafe" }],
+      };
+    }
+
+    if (requirementIds.length > 0) {
+      cases = cases.map((item, index) => ({
+        ...item,
+        requirementRef: requirementIds[index % requirementIds.length],
+      }));
     }
 
     content = JSON.stringify(makePayload(type, cases));

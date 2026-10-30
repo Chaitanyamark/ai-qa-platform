@@ -1,5 +1,9 @@
-import { GenerationResultSchema } from "@/lib/test-generator-schema";
+import {
+  AutomationPlanSchema,
+  GenerationResultSchema,
+} from "@/lib/test-generator-schema";
 import { deduplicateTestCases } from "@/lib/test-case-deduplication";
+import { extractRequirementItems } from "@/lib/requirement-traceability";
 
 const OLLAMA_URL = (
   process.env.OLLAMA_URL || "http://127.0.0.1:11434"
@@ -41,8 +45,6 @@ const TYPE_DEFINITIONS: Record<TestType, string> = {
     "browser, device, viewport or environment differences relevant to the requirement.",
 };
 
-export const MIN_CASES_PER_TYPE = 5;
-const MAX_CASES_PER_TYPE = 8;
 const MAX_GENERATED_CASES = 50;
 const MAX_ATTEMPTS_PER_TYPE = 2;
 
@@ -98,6 +100,32 @@ function normalizeTypes(raw: unknown, types: TestType[]): unknown {
   };
 }
 
+function normalizeAutomationPlans(raw: unknown): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const obj = raw as { testCases?: unknown };
+  if (!Array.isArray(obj.testCases)) return raw;
+
+  return {
+    ...obj,
+    testCases: obj.testCases.map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return item;
+      const testCase = item as Record<string, unknown>;
+      const parsed = AutomationPlanSchema.safeParse(testCase.automationPlan);
+      return {
+        ...testCase,
+        automationPlan: parsed.success
+          ? parsed.data
+          : {
+              mode: "manual",
+              reason: testCase.automationPlan
+                ? "The generated action plan did not match the supported browser actions."
+                : "The model did not provide a supported browser action plan.",
+            },
+      };
+    }),
+  };
+}
+
 function parseModelJson(content: string): unknown {
   const cleaned = content
     .trim()
@@ -122,7 +150,16 @@ function parseModelJson(content: string): unknown {
   }
 }
 
-function buildPrompt(requirement: string, type: TestType): string {
+function buildPrompt(
+  requirement: string,
+  type: TestType,
+  maxCasesForType: number,
+): string {
+  const requirementItems = extractRequirementItems(requirement);
+  const traceabilityList = requirementItems
+    .map((item) => `- ${item.requirementId}: ${item.criterion}`)
+    .join("\n");
+
   return `
 You are a senior QA engineer writing detailed, executable manual test cases.
 
@@ -132,9 +169,18 @@ ${requirement}
 </requirement>
 
 TASK
-Write ${MIN_CASES_PER_TYPE} to ${MAX_CASES_PER_TYPE} distinct test cases of type "${type}" and nothing else.
+Write the number of distinct test cases of type "${type}" that this requirement needs.
 "${type}" means: ${TYPE_DEFINITIONS[type]}
-Cover different behaviors from the requirement. No near-duplicates.
+Do not use a fixed count, minimum, or quota per category. Choose the count from
+the distinct behaviors and independently testable acceptance criteria in the
+requirement. Give every applicable criterion at least one directly linked
+case. Add cases for materially different conditions, roles, states, or
+boundaries when the requirement supports them. Do not combine different
+criteria into one case just to reduce the count. Do not invent scenarios to
+inflate it. If this category has no justified scenario, return an empty
+testCases array and explain that in summary or openQuestions.
+The overall response is limited to 50 cases across the selected categories;
+generate no more than ${maxCasesForType} cases for this category.
 
 QUALITY RULES
 1. Title: specific, names the behavior and the condition being verified.
@@ -150,7 +196,30 @@ QUALITY RULES
    should see or which state should change. Never "works as expected".
 6. One primary verification per test case.
 7. requirementRef: the real ID from the requirement if one exists (a Jira key
-   or acceptance-criterion number), otherwise "Supplied requirement".
+   or acceptance-criterion number), otherwise the supplied ID from the
+   traceability list below. Never invent a reference.
+8. automationPlan: include a structured browser plan only when the controls,
+   page path and expected outcome are explicit enough to automate. Otherwise
+   use {"mode":"manual","reason":"..."}. Do not guess selectors, URLs,
+   hidden application behavior, or success messages.
+
+SUPPORTED BROWSER ACTIONS
+- {"action":"navigate","path":"/same-origin-path"}
+- {"action":"fill","label":"Accessible field label","value":"synthetic value"}
+- {"action":"click","role":"button","name":"Visible control name"}
+- {"action":"assert-visible","role":"alert"}
+- {"action":"assert-text","text":"Text stated by the requirement"}
+- {"action":"assert-url","contains":"/expected-path"}
+An automated plan must contain at least one assertion action. Generated
+fill/click actions will run only after the user explicitly enables interaction
+for an authorized test environment. Mark destructive actions, contact or job
+applications, purchases, and other externally visible submissions as manual.
+Use synthetic test values only.
+
+REQUIREMENT TRACEABILITY IDS
+Use exactly one primary requirement ID from this extracted list for each case.
+The links are review aids; do not claim coverage that the test does not prove.
+${traceabilityList}
 
 GROUNDING
 - Use field names, buttons, pages, endpoints, messages and limits exactly as
@@ -181,7 +250,16 @@ EXAMPLE OF THE REQUIRED LEVEL OF DETAIL
   ],
   "testData": "Display name: Asha Verma",
   "expectedResult": "The profile shows \\"Asha Verma\\" after the reload and the header displays the same name.",
-  "requirementRef": "Supplied requirement"
+  "requirementRef": "${requirementItems[0]?.requirementId ?? "REQ-001"}",
+  "automationPlan": {
+    "mode": "automated",
+    "actions": [
+      {"action":"navigate","path":"/profile"},
+      {"action":"fill","label":"Display name","value":"Asha Verma"},
+      {"action":"click","role":"button","name":"Save"},
+      {"action":"assert-text","text":"Asha Verma"}
+    ]
+  }
 }
 
 OUTPUT
@@ -190,11 +268,12 @@ the JSON. Use this structure:
 {
   "summary": "Behaviors covered, scope and limitations.",
   "openQuestions": ["Only important missing information."],
-  "testCases": [ ...${MIN_CASES_PER_TYPE} to ${MAX_CASES_PER_TYPE} objects shaped like the example above... ]
+  "testCases": [ ...as many objects as the distinct scenarios require, up to 50... ]
 }
 
 Every test case needs: id, title, type, priority, preconditions, steps,
-expectedResult and requirementRef. testData is optional.
+expectedResult, requirementRef and automationPlan. testData is optional. If a
+case cannot be mapped safely to the supported browser actions, mark it manual.
 The type of every test case must be exactly "${type}".
 Priority must be High, Medium or Low:
 High = critical journey, security or data integrity; Medium = important
@@ -205,7 +284,8 @@ behavior; Low = minor impact.
 async function generateForType(
   requirement: string,
   type: TestType,
-  temperature: number
+  temperature: number,
+  maxCasesForType: number,
 ) {
   let response: Response;
 
@@ -236,7 +316,7 @@ async function generateForType(
           },
           {
             role: "user",
-            content: buildPrompt(requirement, type),
+            content: buildPrompt(requirement, type, maxCasesForType),
           },
         ],
       }),
@@ -273,7 +353,10 @@ async function generateForType(
     );
   }
 
-  const parsed = normalizeTypes(parseModelJson(content), [type]);
+  const parsed = normalizeTypes(
+    normalizeAutomationPlans(parseModelJson(content)),
+    [type],
+  );
 
   return GenerationResultSchema.parse(parsed);
 }
@@ -299,6 +382,10 @@ export async function callLLM(
   const results: Awaited<ReturnType<typeof generateForType>>[] = [];
   const errors: string[] = [];
   const failedTypes: TestType[] = [];
+  const maxCasesForType = Math.max(
+    1,
+    Math.floor(MAX_GENERATED_CASES / types.length),
+  );
 
   // One focused request per type keeps every response small enough to
   // finish before the token limit, which is what small local models need.
@@ -313,7 +400,8 @@ export async function callLLM(
         const result = await generateForType(
           requirement,
           type,
-          attempt === 1 ? 0.25 : 0.4
+          attempt === 1 ? 0.25 : 0.4,
+          maxCasesForType,
         );
 
         results.push(result);
@@ -358,12 +446,6 @@ export async function callLLM(
       .filter((testCase) => types.includes(testCase.type))
   );
 
-  if (allCases.length === 0) {
-    throw new Error(
-      "Ollama returned no usable test cases for the selected types."
-    );
-  }
-
   const summary =
     results.map((result) => result.summary).find((text) => text?.trim()) ??
     "";
@@ -380,12 +462,17 @@ export async function callLLM(
       ...testCase,
       id: `TC${String(index + 1).padStart(3, "0")}`,
     }));
+  const limitQuestion = allCases.length > MAX_GENERATED_CASES
+    ? [`Generation reached the ${MAX_GENERATED_CASES}-case response limit. Review missing requirement links and split the request if needed.`]
+    : [];
   return {
     ...results[0],
     summary,
-    openQuestions,
+    openQuestions: [...openQuestions, ...limitQuestion],
     testCases,
     failedTypes,
-    minimumCasesPerType: MIN_CASES_PER_TYPE,
+    emptyTypes: types.filter(
+      (type) => !testCases.some((testCase) => testCase.type === type),
+    ),
   };
 }

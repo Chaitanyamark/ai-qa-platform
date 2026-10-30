@@ -1,6 +1,26 @@
 import { defineConfig } from "@playwright/test";
 
 const useInstalledChrome = process.env.PLAYWRIGHT_CHANNEL === "chrome";
+const localWebServers = [
+  {
+    command: "node tests/support/mock-ollama.mjs",
+    url: "http://127.0.0.1:12436/health",
+    reuseExistingServer: !process.env.CI,
+    timeout: 10_000,
+  },
+  {
+    command: "npx next dev --webpack --hostname=127.0.0.1 --port=33213",
+    url: "http://127.0.0.1:33213",
+    reuseExistingServer: !process.env.CI,
+    timeout: 120_000,
+    env: {
+      QA_PLAYWRIGHT_BUILD_DIR: ".next-qa",
+      OLLAMA_URL: "http://127.0.0.1:12436",
+      OLLAMA_MODEL: "qa-mock",
+      OLLAMA_TIMEOUT_MS: "3000",
+    },
+  },
+];
 
 export default defineConfig({
   testDir: "./tests",
@@ -11,27 +31,12 @@ export default defineConfig({
   timeout: 30_000,
   use: {
     ...(useInstalledChrome ? { channel: "chrome" } : {}),
-    baseURL: "http://127.0.0.1:3210",
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://127.0.0.1:33213",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  webServer: [
-    {
-      command: "node tests/support/mock-ollama.mjs",
-      url: "http://127.0.0.1:11435/health",
-      reuseExistingServer: false,
-      timeout: 10_000,
-    },
-    {
-      command: "npm run dev -- --hostname 127.0.0.1 --port 3210",
-      url: "http://127.0.0.1:3210",
-      reuseExistingServer: false,
-      timeout: 120_000,
-      env: {
-        OLLAMA_URL: "http://127.0.0.1:11435",
-        OLLAMA_MODEL: "qa-mock",
-        OLLAMA_TIMEOUT_MS: "3000",
-      },
-    },
-  ],
+  // Unit-style proxy/schema tests do not need the local app or mock provider.
+  ...(process.env.QA_SKIP_WEB_SERVER === "1"
+    ? {}
+    : { webServer: localWebServers }),
 });

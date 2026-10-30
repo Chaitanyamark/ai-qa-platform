@@ -855,6 +855,14 @@ export default function Home() {
 
                 </p>
 
+                {generation.coverage && (
+                  <p className="text-xs text-slate-400" aria-label="Generated case counts">
+                    Cases by category: {generation.coverage.caseCounts
+                      .map(({ type, count }) => `${type}: ${count}`)
+                      .join(" · ")}
+                  </p>
+                )}
+
 
 
                 {partialCoverage && (
@@ -863,18 +871,18 @@ export default function Home() {
                     aria-label="Generation coverage warning"
                     className="rounded-lg border border-amber-700 bg-amber-950/40 p-3 text-sm text-amber-200"
                   >
-                    <strong>Partial generation:</strong>{" "}
-                    {partialCoverage.caseCounts
-                      .filter(
-                        ({ type }) =>
-                          partialCoverage.failedTypes.includes(type) ||
-                          partialCoverage.underfilledTypes.includes(type)
-                      )
-                      .map(
-                        ({ type, count }) =>
-                          `${type}: ${count} of at least ${partialCoverage.minimumCasesPerType} cases (${partialCoverage.failedTypes.includes(type) ? "AI generation failed" : "below minimum"})`
-                      )
-                      .join("; ")}
+                    <strong>Coverage needs review:</strong>{" "}
+                    {[
+                      ...partialCoverage.failedTypes.map(
+                        (type) => `${type}: AI generation failed`,
+                      ),
+                      ...partialCoverage.emptyTypes.map(
+                        (type) => `${type}: no applicable cases were generated`,
+                      ),
+                      ...(partialCoverage.missingRequirementIds.length > 0
+                        ? [`No generated case is linked to: ${partialCoverage.missingRequirementIds.join(", ")}`]
+                        : []),
+                    ].join("; ")}
                   </p>
                 )}
 
@@ -910,6 +918,27 @@ export default function Home() {
 
 
 
+            {generation?.requirementCoverage && generation.requirementCoverage.length > 0 && (
+              <section className="space-y-3 border-t border-slate-800 pt-5" aria-label="Requirement traceability">
+                <h3 className="text-lg font-bold">Requirement-to-test links</h3>
+                <p className="text-xs leading-5 text-slate-400">
+                  These links come from generated requirement references. Review each case to confirm it truly verifies the criterion; a link alone is not proof of full coverage.
+                </p>
+                <div className="space-y-2">
+                  {generation.requirementCoverage.map((item) => (
+                    <article key={item.requirementId} className="rounded-lg border border-slate-800 bg-slate-950 p-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <strong className="text-sm text-blue-300">{item.requirementId}</strong>
+                        <span className={item.status === "linked" ? "text-xs text-emerald-300" : "text-xs text-amber-300"}>
+                          {item.status === "linked" ? `Linked: ${item.testCaseIds.join(", ")}` : "No generated case is linked"}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm text-slate-300">{item.criterion}</p>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
             {generatedTests.length > 0 && (
 
               <div className="space-y-4 border-t border-slate-800 pt-5">
@@ -979,6 +1008,16 @@ export default function Home() {
                       {test.requirementRef}
 
                     </p>
+                    <p className="mt-3 text-sm text-slate-400">Execution readiness</p>
+                    {test.automationPlan?.mode === "automated" ? (
+                      <p className="mt-1 text-sm text-emerald-300">
+                        Automated plan · {test.automationPlan.actions.length} browser actions
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-sm text-amber-300">
+                        Manual · {test.automationPlan?.mode === "manual" ? test.automationPlan.reason : "No supported action plan was provided."}
+                      </p>
+                    )}
 
 
 
